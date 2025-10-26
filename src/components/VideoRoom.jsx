@@ -587,7 +587,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     const startLocalVideo = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: true,
+                // video: true,
                 audio: true
             });
 
