@@ -25,55 +25,274 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     };
 
     const createPeerConnection = useCallback((remoteUserId, isInitiator = false) => {
-        console.log(`Creating peer connection with ${remoteUserId} (initiator: ${isInitiator})`);
+        console.log(`Creating peer connection with ${remoteUserId}:`, {
+            isInitiator,
+            currentRoom,
+            existingConnections: Array.from(peerConnections.keys()),
+            signalingState: peerConnections.get(remoteUserId)?.pc?.signalingState
+        });
+
+        // Check if we already have a connection
+        const existingConnection = peerConnections.get(remoteUserId);
+        if (existingConnection?.pc) {
+            console.log(`Existing connection found for ${remoteUserId}:`, {
+                state: existingConnection.pc.connectionState,
+                signalingState: existingConnection.pc.signalingState
+            });
+            return existingConnection.pc;
+        }
 
         const pc = new RTCPeerConnection(iceServers);
 
-        // Add local stream if available
-        if (localStream) {
-            localStream.getTracks().forEach(track => {
-                pc.addTrack(track, localStream);
-            });
-        }
-
-        // Handle remote stream
-        pc.ontrack = (event) => {
-            console.log(`Received remote stream from ${remoteUserId}`);
-            const remoteStream = event.streams[0];
-            setPeerConnections(prev => {
-                const newConnections = new Map(prev);
-                newConnections.set(remoteUserId, { ...newConnections.get(remoteUserId), stream: remoteStream });
-                return newConnections;
-            });
+        // Create a connection-specific lock to prevent race conditions
+        const connectionLock = {
+            isAddingTracks: false,
+            tracksAdded: false,
+            remoteUserId: remoteUserId
         };
 
-        // Handle ICE candidates
+        // Safely add local stream tracks with locking mechanism
+        const addLocalTracksToConnection = (stream) => {
+            if (connectionLock.isAddingTracks || connectionLock.tracksAdded) {
+                console.log(`Tracks already being added or added for ${remoteUserId}`);
+                return;
+            }
+
+            connectionLock.isAddingTracks = true;
+            console.log(`Adding local stream tracks to peer connection for ${remoteUserId}:`, {
+                streamId: stream.id,
+                trackCount: stream.getTracks().length,
+                videoTracks: stream.getVideoTracks().length,
+                audioTracks: stream.getAudioTracks().length
+            });
+
+            try {
+                stream.getTracks().forEach((track, index) => {
+                    console.log(`Adding track ${index} (${track.kind}) to ${remoteUserId}:`, {
+                        trackId: track.id,
+                        trackLabel: track.label,
+                        trackEnabled: track.enabled,
+                        trackReadyState: track.readyState
+                    });
+
+                    // Add track with explicit stream association
+                    const sender = pc.addTrack(track, stream);
+                    console.log(`Track added successfully for ${remoteUserId}:`, {
+                        trackKind: track.kind,
+                        senderId: sender.track?.id,
+                        streamId: stream.id
+                    });
+                });
+
+                connectionLock.tracksAdded = true;
+                console.log(`All tracks successfully added to peer connection for ${remoteUserId}`);
+            } catch (error) {
+                console.error(`Error adding tracks to peer connection for ${remoteUserId}:`, error);
+            } finally {
+                connectionLock.isAddingTracks = false;
+            }
+        };
+
+        // Add local stream if available
+        if (localStream) {
+            addLocalTracksToConnection(localStream);
+        }
+
+        // Handle remote stream with proper validation and association
+        pc.ontrack = (event) => {
+            console.log(`Received remote track from ${remoteUserId}:`, {
+                trackKind: event.track.kind,
+                trackId: event.track.id,
+                trackLabel: event.track.label,
+                streamCount: event.streams.length,
+                streamIds: event.streams.map(s => s.id)
+            });
+
+            if (event.streams && event.streams.length > 0) {
+                const remoteStream = event.streams[0];
+                console.log(`Processing remote stream from ${remoteUserId}:`, {
+                    streamId: remoteStream.id,
+                    trackCount: remoteStream.getTracks().length,
+                    videoTracks: remoteStream.getVideoTracks().length,
+                    audioTracks: remoteStream.getAudioTracks().length,
+                    active: remoteStream.active
+                });
+
+                // Validate stream integrity
+                if (remoteStream.getTracks().length === 0) {
+                    console.warn(`Empty remote stream received from ${remoteUserId}`);
+                    return;
+                }
+
+                // Update peer connection with validated stream
+                setPeerConnections(prev => {
+                    const newConnections = new Map(prev);
+                    const existingConnection = newConnections.get(remoteUserId);
+
+                    if (existingConnection) {
+                        newConnections.set(remoteUserId, {
+                            ...existingConnection,
+                            stream: remoteStream,
+                            streamId: remoteStream.id,
+                            lastStreamUpdate: Date.now()
+                        });
+                        console.log(`Stream associated with peer connection for ${remoteUserId}`);
+                    } else {
+                        console.warn(`No existing peer connection found for stream from ${remoteUserId}`);
+                    }
+
+                    return newConnections;
+                });
+
+                // Monitor stream health
+                remoteStream.addEventListener('addtrack', (e) => {
+                    console.log(`Track added to remote stream from ${remoteUserId}:`, e.track.kind);
+                });
+
+                remoteStream.addEventListener('removetrack', (e) => {
+                    console.log(`Track removed from remote stream from ${remoteUserId}:`, e.track.kind);
+                });
+            } else {
+                console.warn(`No streams in track event from ${remoteUserId}`);
+            }
+        };
+
+        // Handle ICE candidates - Use a function that gets fresh state
         pc.onicecandidate = (event) => {
-            if (event.candidate && socket) {
-                socket.emit('webrtc', JSON.stringify({
-                    type: 'ice-candidate',
-                    roomId: currentRoom,
-                    candidate: event.candidate,
-                    targetUserId: remoteUserId,
-                    userId: currentUser?.id
-                }));
+            console.log('ICE candidate event triggered:', {
+                hasCandidate: !!event.candidate,
+                candidateType: event.candidate?.type,
+                protocol: event.candidate?.protocol,
+                remoteUserId
+            });
+
+            if (event.candidate) {
+                // Use a timeout to ensure we get the latest state
+                setTimeout(() => {
+                    // Get the most current socket and state references
+                    const latestSocket = socket;
+                    const latestRoom = currentRoom;
+                    const latestUser = currentUser;
+
+                    console.log('Attempting to emit ICE candidate with current state:', {
+                        socketExists: !!latestSocket,
+                        socketConnected: latestSocket?.connected,
+                        roomId: latestRoom,
+                        userId: latestUser?.id,
+                        candidateType: event.candidate.type
+                    });
+
+                    if (!latestSocket) {
+                        console.error('Socket not available for ICE candidate emission');
+                        return;
+                    }
+
+                    if (!latestSocket.connected) {
+                        console.error('Socket not connected for ICE candidate emission');
+                        return;
+                    }
+
+                    if (!latestRoom) {
+                        console.error('Current room not available for ICE candidate emission');
+                        return;
+                    }
+
+                    if (!latestUser?.id) {
+                        console.error('Current user ID not available for ICE candidate emission');
+                        return;
+                    }
+
+                    console.log('Successfully emitting ICE candidate:', {
+                        candidateType: event.candidate.type,
+                        protocol: event.candidate.protocol,
+                        toUser: remoteUserId,
+                        roomId: latestRoom,
+                        fromUser: latestUser.id
+                    });
+
+                    latestSocket.emit('webrtc', JSON.stringify({
+                        type: 'ice-candidate',
+                        roomId: latestRoom,
+                        candidate: {
+                            candidate: event.candidate.candidate,
+                            sdpMid: event.candidate.sdpMid,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex,
+                            usernameFragment: event.candidate.usernameFragment,
+                            type: event.candidate.type,
+                            protocol: event.candidate.protocol
+                        },
+                        targetUserId: remoteUserId,
+                        userId: latestUser.id
+                    }));
+                }, 0);
+            } else {
+                console.log('ICE gathering complete for peer:', remoteUserId);
             }
         };
 
         // Handle connection state changes
         pc.onconnectionstatechange = () => {
-            console.log(`Peer connection state with ${remoteUserId}: ${pc.connectionState}`);
+            console.log(`Peer connection state with ${remoteUserId}:`, {
+                connectionState: pc.connectionState,
+                iceConnectionState: pc.iceConnectionState,
+                iceGatheringState: pc.iceGatheringState
+            });
             setPeerConnections(prev => {
                 const newConnections = new Map(prev);
-                newConnections.set(remoteUserId, { ...newConnections.get(remoteUserId), state: pc.connectionState });
+                newConnections.set(remoteUserId, {
+                    ...newConnections.get(remoteUserId),
+                    state: pc.connectionState,
+                    iceState: pc.iceConnectionState
+                });
                 return newConnections;
+            });
+        };
+
+        // Monitor ICE gathering state
+        pc.onicegatheringstatechange = () => {
+            console.log(`ICE gathering state changed for ${remoteUserId}:`, {
+                iceGatheringState: pc.iceGatheringState,
+                connectionState: pc.connectionState,
+                hasLocalDescription: !!pc.localDescription,
+                hasRemoteDescription: !!pc.remoteDescription,
+                signalingState: pc.signalingState
+            });
+
+            if (pc.iceGatheringState === 'gathering') {
+                console.log(`ICE gathering started for ${remoteUserId} - candidates should start flowing`);
+            }
+        };
+
+        // Monitor ICE connection state
+        pc.oniceconnectionstatechange = () => {
+            console.log(`ICE connection state changed for ${remoteUserId}:`, {
+                iceConnectionState: pc.iceConnectionState,
+                connectionState: pc.connectionState,
+                signalingState: pc.signalingState
             });
         };
 
         setPeerConnections(prev => {
             const newConnections = new Map(prev);
-            newConnections.set(remoteUserId, { pc, state: pc.connectionState });
+            newConnections.set(remoteUserId, {
+                pc,
+                state: pc.connectionState,
+                remoteUserId,
+                created: Date.now(),
+                connectionLock,
+                addLocalTracksToConnection, // Store the function for later use
+                localTracksAdded: connectionLock.tracksAdded
+            });
             return newConnections;
+        });
+
+        console.log(`Peer connection created for ${remoteUserId}:`, {
+            isInitiator,
+            hasLocalStream: !!localStream,
+            localTracksAdded: connectionLock.tracksAdded,
+            currentRoom,
+            currentUser: currentUser?.id,
+            socketConnected: socket?.connected
         });
 
         // If we're the initiator, create and send offer
@@ -82,7 +301,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         }
 
         return pc;
-    }, [localStream, socket, currentRoom]);
+    }, [localStream, socket, currentRoom, currentUser]);
 
     const createAndSendOffer = async (pc, remoteUserId) => {
         try {
@@ -105,31 +324,73 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         const eventData = Array.isArray(data) ? data[0] : data;
         const { userId: remoteUserId, sdp, roomId: eventRoomId } = eventData;
 
-        console.log('Processing offer:', { remoteUserId, eventRoomId, currentRoom });
+        console.log('Processing offer:', {
+            remoteUserId,
+            eventRoomId,
+            currentRoom,
+            existingConnections: Array.from(peerConnections.keys())
+        });
 
+        // Check if we should process this offer
         // if (eventRoomId !== currentRoom) {
         //     console.warn('Received offer for wrong room', eventRoomId, currentRoom);
         //     return;
         // }
 
-        let pc = peerConnections.get(remoteUserId)?.pc;
+        let existingConnection = peerConnections.get(remoteUserId);
+        let pc = existingConnection?.pc;
 
         if (!pc) {
+            console.log('No existing connection, creating new one for offer');
             pc = createPeerConnection(remoteUserId, false);
+        } else {
+            console.log('Found existing connection:', {
+                state: pc.connectionState,
+                signalingState: pc.signalingState
+            });
+
+            // If connection is closed or failed, create a new one
+            if (['closed', 'failed'].includes(pc.connectionState)) {
+                console.log('Existing connection is closed/failed, creating new one');
+                pc = createPeerConnection(remoteUserId, false);
+            }
         }
 
         try {
+            // Check signaling state before setting remote description
+            if (pc.signalingState === 'stable') {
+                console.log('Warning: RTCPeerConnection is already stable, may need to negotiate');
+            }
+
+            console.log('Setting remote description from offer');
             await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+            // Create and set local description (answer)
+            console.log('Creating answer');
             const answer = await pc.createAnswer();
+
+            console.log('Setting local description');
             await pc.setLocalDescription(answer);
 
-            console.log('Sending answer to:', {
-                remoteUserId, roomId: currentRoom,
-                sdp: answer,
-                targetUserId: remoteUserId,
-                userId: currentUser?.id
+            // Update connection state in our Map
+            setPeerConnections(prev => {
+                const newConnections = new Map(prev);
+                newConnections.set(remoteUserId, {
+                    ...newConnections.get(remoteUserId),
+                    state: pc.connectionState,
+                    signalingState: pc.signalingState
+                });
+                return newConnections;
             });
 
+            console.log('Sending answer:', {
+                remoteUserId,
+                roomId: eventRoomId,
+                connectionState: pc.connectionState,
+                signalingState: pc.signalingState
+            });
+
+            // Send the answer back
             socket?.emit('webrtc', JSON.stringify({
                 type: 'answer',
                 roomId: eventRoomId,
@@ -139,6 +400,16 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             }));
         } catch (error) {
             console.error('Error handling offer:', error);
+            // Clean up failed connection
+            if (pc.connectionState !== 'connected') {
+                console.log('Connection failed, cleaning up');
+                pc.close();
+                setPeerConnections(prev => {
+                    const newConnections = new Map(prev);
+                    newConnections.delete(remoteUserId);
+                    return newConnections;
+                });
+            }
         }
     };
 
@@ -146,19 +417,31 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         const eventData = Array.isArray(data) ? data[0] : data;
         const { userId: remoteUserId, sdp, roomId: eventRoomId } = eventData;
 
-        console.log('Processing answer:', { remoteUserId, eventRoomId, currentRoom });
+        console.log('Processing answer:', {
+            remoteUserId,
+            eventRoomId,
+            currentRoom,
+            existingConnections: Array.from(peerConnections.keys())
+        });
 
-        const pc = peerConnections.get(remoteUserId)?.pc;
+        const existingConnection = peerConnections.get(remoteUserId);
+        const pc = existingConnection?.pc;
 
         if (pc) {
             try {
+                if (pc.signalingState === 'stable') {
+                    console.log('Warning: RTCPeerConnection is already stable');
+                    return;
+                }
                 await pc.setRemoteDescription(new RTCSessionDescription(sdp));
                 console.log('Successfully set remote description from answer');
             } catch (error) {
                 console.error('Error handling answer:', error);
             }
         } else {
-            console.warn('No peer connection found for:', remoteUserId);
+            console.warn('No peer connection found for:', remoteUserId, 'Creating new connection');
+            // Try to create a new connection if we don't have one
+            createPeerConnection(remoteUserId, false);
         }
     };
 
@@ -166,24 +449,74 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         const eventData = Array.isArray(data) ? data[0] : data;
         const { userId: remoteUserId, candidate, roomId: eventRoomId } = eventData;
 
-        console.log('Processing ICE candidate:', { remoteUserId, eventRoomId, currentRoom });
+        console.log('Processing ICE candidate:', {
+            remoteUserId,
+            eventRoomId,
+            currentRoom,
+            candidateType: candidate.type,
+            protocol: candidate.protocol,
+            existingConnections: Array.from(peerConnections.keys())
+        });
 
-        if (eventRoomId !== currentRoom) {
-            console.warn('Received ICE candidate for wrong room', eventRoomId, currentRoom);
-            return;
-        }
+        // if (eventRoomId !== currentRoom) {
+        //     console.warn('Received ICE candidate for wrong room', eventRoomId, currentRoom);
+        //     return;
+        // }
 
-        const pc = peerConnections.get(remoteUserId)?.pc;
+        const existingConnection = peerConnections.get(remoteUserId);
+        const pc = existingConnection?.pc;
 
         if (pc) {
             try {
-                await pc.addIceCandidate(new RTCIceCandidate(candidate));
-                console.log('Successfully added ICE candidate');
+                // Check if we can add the candidate
+                if (pc.remoteDescription === null) {
+                    console.warn('Waiting for remote description before adding ICE candidate');
+                    return;
+                }
+
+                if (pc.signalingState === 'closed') {
+                    console.warn('Connection is closed, cannot add ICE candidate');
+                    return;
+                }
+
+                console.log('ICE Connection state before adding candidate:', {
+                    iceConnectionState: pc.iceConnectionState,
+                    iceGatheringState: pc.iceGatheringState,
+                    connectionState: pc.connectionState,
+                    signalingState: pc.signalingState
+                });
+
+                // Create a proper RTCIceCandidate
+                const iceCandidate = new RTCIceCandidate({
+                    candidate: candidate.candidate,
+                    sdpMid: candidate.sdpMid,
+                    sdpMLineIndex: candidate.sdpMLineIndex,
+                    usernameFragment: candidate.usernameFragment
+                });
+
+                await pc.addIceCandidate(iceCandidate);
+
+                console.log('Successfully added ICE candidate, new states:', {
+                    iceConnectionState: pc.iceConnectionState,
+                    iceGatheringState: pc.iceGatheringState,
+                    connectionState: pc.connectionState,
+                    signalingState: pc.signalingState
+                });
             } catch (error) {
                 console.error('Error adding ICE candidate:', error);
+                console.log('Failed ICE candidate details:', {
+                    candidateType: candidate.type,
+                    protocol: candidate.protocol,
+                    signalingState: pc.signalingState,
+                    hasRemoteDescription: pc.remoteDescription !== null
+                });
             }
         } else {
-            console.warn('No peer connection found for ICE candidate:', remoteUserId);
+            console.warn('No peer connection found for ICE candidate:', {
+                remoteUserId,
+                candidateType: candidate.type,
+                protocol: candidate.protocol
+            });
         }
     };
 
@@ -257,7 +590,33 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                 video: true,
                 audio: true
             });
+
+            console.log('Local stream acquired:', {
+                streamId: stream.id,
+                trackCount: stream.getTracks().length,
+                videoTracks: stream.getVideoTracks().length,
+                audioTracks: stream.getAudioTracks().length,
+                active: stream.active
+            });
+
             setLocalStream(stream);
+
+            // Add tracks to existing peer connections with proper locking
+            console.log('Adding tracks to existing peer connections:', peerConnections.size);
+            peerConnections.forEach(({ pc, addLocalTracksToConnection, connectionLock, remoteUserId }) => {
+                if (pc && addLocalTracksToConnection && !connectionLock?.tracksAdded) {
+                    console.log(`Adding tracks to existing connection for ${remoteUserId}`);
+                    addLocalTracksToConnection(stream);
+                } else if (connectionLock?.tracksAdded) {
+                    console.log(`Tracks already added to connection for ${remoteUserId}`);
+                } else {
+                    console.warn(`Cannot add tracks to connection for ${remoteUserId}:`, {
+                        hasPc: !!pc,
+                        hasAddFunction: !!addLocalTracksToConnection,
+                        hasLock: !!connectionLock
+                    });
+                }
+            });
 
             // If we're in a room, initiate connections with all users
             if (currentRoom && users.length > 0) {
@@ -266,28 +625,81 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                     // Don't create connection with ourselves
                     if (user !== currentUser?.id) {
                         console.log('Initiating connection with:', user);
-                        // Create peer connection as initiator
+                        // Create peer connection as initiator (tracks will be added automatically)
                         createPeerConnection(user, true);
+                    } else {
+                        console.log('Skipping connection with self:', user, currentUser?.id);
                     }
-                    else console.log('Skipping connection with self:', user, currentUser?.id)
                 });
             }
-
-            // Add tracks to existing peer connections
-            peerConnections.forEach(({ pc }) => {
-                stream.getTracks().forEach(track => {
-                    pc?.addTrack(track, stream);
-                });
-            });
         } catch (error) {
             console.error('Error accessing media devices:', error);
         }
     };
 
     const stopLocalVideo = () => {
-        localStream?.getTracks().forEach(track => track.stop());
+        if (localStream) {
+            console.log('Stopping local video stream:', {
+                streamId: localStream.id,
+                trackCount: localStream.getTracks().length
+            });
+
+            localStream.getTracks().forEach((track, index) => {
+                console.log(`Stopping track ${index}:`, {
+                    kind: track.kind,
+                    id: track.id,
+                    readyState: track.readyState
+                });
+                track.stop();
+            });
+        }
         setLocalStream(null);
     };
+
+    // Utility function to validate stream integrity
+    const validateStreamIntegrity = useCallback(() => {
+        console.log('Validating stream integrity across all connections:');
+
+        peerConnections.forEach(({ pc, remoteUserId, stream, streamId }) => {
+            if (pc) {
+                const senders = pc.getSenders();
+                const receivers = pc.getReceivers();
+
+                console.log(`Connection ${remoteUserId}:`, {
+                    connectionState: pc.connectionState,
+                    signalingState: pc.signalingState,
+                    sendersCount: senders.length,
+                    receiversCount: receivers.length,
+                    hasRemoteStream: !!stream,
+                    remoteStreamId: streamId,
+                    remoteStreamActive: stream?.active
+                });
+
+                // Validate senders
+                senders.forEach((sender, index) => {
+                    if (sender.track) {
+                        console.log(`  Sender ${index}:`, {
+                            trackKind: sender.track.kind,
+                            trackId: sender.track.id,
+                            trackEnabled: sender.track.enabled,
+                            trackReadyState: sender.track.readyState
+                        });
+                    }
+                });
+
+                // Validate receivers
+                receivers.forEach((receiver, index) => {
+                    if (receiver.track) {
+                        console.log(`  Receiver ${index}:`, {
+                            trackKind: receiver.track.kind,
+                            trackId: receiver.track.id,
+                            trackReadyState: receiver.track.readyState
+                        });
+                    }
+                });
+            }
+        });
+    }, [peerConnections]);
 
     // Connect to server on mount
     useEffect(() => {
@@ -336,11 +748,22 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
                 // If we have local video stream, initiate connections with new users
                 if (localStream) {
+                    console.log('Processing new users with existing local stream:', {
+                        streamId: localStream.id,
+                        streamActive: localStream.active,
+                        newUsers: newUsers.length,
+                        existingConnections: peerConnections.size
+                    });
+
                     newUsers.forEach(user => {
                         // Don't create connection with ourselves or existing connections
                         if (user !== currentUser?.id && !peerConnections.has(user)) {
                             console.log('New user joined, initiating connection with:', user);
                             createPeerConnection(user, true);
+                        } else if (user === currentUser?.id) {
+                            console.log('Skipping self connection:', user);
+                        } else {
+                            console.log('Connection already exists for user:', user);
                         }
                     });
                 }
@@ -397,7 +820,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                             placeholder="Enter Room ID (UUID)"
                             value={roomInputValue}
                             onChange={(e) => setRoomInputValue(e.target.value)}
-                            onKeyPress={(e) => {
+                            onKeyDown={(e) => {
                                 if (e.key === 'Enter' && roomInputValue && connectionStatus === 'connected') {
                                     joinRoom(roomInputValue);
                                 }
@@ -414,6 +837,9 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                     <div className="current-room">
                         <p>Current Room: {currentRoom}</p>
                         <button onClick={leaveRoom}>Leave Room</button>
+                        <button onClick={validateStreamIntegrity} style={{ marginLeft: '10px' }}>
+                            Validate Streams
+                        </button>
                     </div>
                 )}
             </div>
