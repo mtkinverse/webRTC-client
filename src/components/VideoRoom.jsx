@@ -15,6 +15,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     const [currentUser, setCurrentUser] = useState(null);
     const [users, setUsers] = useState([]);
     const [connectionStatus, setConnectionStatus] = useState('disconnected');
+    const [streamValidationResult, setStreamValidationResult] = useState(null);
 
     // ICE servers configuration
     const iceServers = {
@@ -53,22 +54,34 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
         // Safely add local stream tracks with locking mechanism
         const addLocalTracksToConnection = (stream) => {
+            console.log(`🎵 TRACK ADDITION CALLED for ${remoteUserId}:`, {
+                isAddingTracks: connectionLock.isAddingTracks,
+                tracksAdded: connectionLock.tracksAdded,
+                streamExists: !!stream,
+                pcExists: !!pc,
+                pcState: pc?.connectionState
+            });
+
             if (connectionLock.isAddingTracks || connectionLock.tracksAdded) {
-                console.log(`Tracks already being added or added for ${remoteUserId}`);
+                console.log(`⚠️ Tracks already being added or added for ${remoteUserId}:`, {
+                    isAddingTracks: connectionLock.isAddingTracks,
+                    tracksAdded: connectionLock.tracksAdded
+                });
                 return;
             }
 
             connectionLock.isAddingTracks = true;
-            console.log(`Adding local stream tracks to peer connection for ${remoteUserId}:`, {
+            console.log(`🎵 STARTING TRACK ADDITION for ${remoteUserId}:`, {
                 streamId: stream.id,
                 trackCount: stream.getTracks().length,
                 videoTracks: stream.getVideoTracks().length,
-                audioTracks: stream.getAudioTracks().length
+                audioTracks: stream.getAudioTracks().length,
+                currentSenders: pc.getSenders().length
             });
 
             try {
                 stream.getTracks().forEach((track, index) => {
-                    console.log(`Adding track ${index} (${track.kind}) to ${remoteUserId}:`, {
+                    console.log(`🎵 Adding track ${index} (${track.kind}) to ${remoteUserId}:`, {
                         trackId: track.id,
                         trackLabel: track.label,
                         trackEnabled: track.enabled,
@@ -77,17 +90,22 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
                     // Add track with explicit stream association
                     const sender = pc.addTrack(track, stream);
-                    console.log(`Track added successfully for ${remoteUserId}:`, {
+                    console.log(`✅ Track added successfully for ${remoteUserId}:`, {
                         trackKind: track.kind,
                         senderId: sender.track?.id,
-                        streamId: stream.id
+                        streamId: stream.id,
+                        totalSendersNow: pc.getSenders().length
                     });
                 });
 
                 connectionLock.tracksAdded = true;
-                console.log(`All tracks successfully added to peer connection for ${remoteUserId}`);
+                console.log(`🎉 ALL TRACKS SUCCESSFULLY ADDED to peer connection for ${remoteUserId}:`, {
+                    totalSenders: pc.getSenders().length,
+                    connectionState: pc.connectionState,
+                    signalingState: pc.signalingState
+                });
             } catch (error) {
-                console.error(`Error adding tracks to peer connection for ${remoteUserId}:`, error);
+                console.error(`❌ ERROR adding tracks to peer connection for ${remoteUserId}:`, error);
             } finally {
                 connectionLock.isAddingTracks = false;
             }
@@ -100,17 +118,18 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
         // Handle remote stream with proper validation and association
         pc.ontrack = (event) => {
-            console.log(`Received remote track from ${remoteUserId}:`, {
+            console.log(`🎥 REMOTE TRACK RECEIVED from ${remoteUserId}:`, {
                 trackKind: event.track.kind,
                 trackId: event.track.id,
                 trackLabel: event.track.label,
                 streamCount: event.streams.length,
-                streamIds: event.streams.map(s => s.id)
+                streamIds: event.streams.map(s => s.id),
+                timestamp: new Date().toISOString()
             });
 
             if (event.streams && event.streams.length > 0) {
                 const remoteStream = event.streams[0];
-                console.log(`Processing remote stream from ${remoteUserId}:`, {
+                console.log(`🔄 Processing remote stream from ${remoteUserId}:`, {
                     streamId: remoteStream.id,
                     trackCount: remoteStream.getTracks().length,
                     videoTracks: remoteStream.getVideoTracks().length,
@@ -120,40 +139,55 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
                 // Validate stream integrity
                 if (remoteStream.getTracks().length === 0) {
-                    console.warn(`Empty remote stream received from ${remoteUserId}`);
+                    console.warn(`⚠️ Empty remote stream received from ${remoteUserId}`);
                     return;
                 }
 
-                // Update peer connection with validated stream
-                setPeerConnections(prev => {
-                    const newConnections = new Map(prev);
-                    const existingConnection = newConnections.get(remoteUserId);
+                // Use setTimeout to avoid stale closure issues
+                setTimeout(() => {
+                    console.log(`🔄 Updating peer connections state for ${remoteUserId} with fresh state`);
 
-                    if (existingConnection) {
-                        newConnections.set(remoteUserId, {
-                            ...existingConnection,
-                            stream: remoteStream,
-                            streamId: remoteStream.id,
-                            lastStreamUpdate: Date.now()
+                    setPeerConnections(currentConnections => {
+                        const newConnections = new Map(currentConnections);
+                        const existingConnection = newConnections.get(remoteUserId);
+
+                        console.log(`🔍 Current connection state for ${remoteUserId}:`, {
+                            exists: !!existingConnection,
+                            hasPC: !!existingConnection?.pc,
+                            currentStreamId: existingConnection?.streamId,
+                            newStreamId: remoteStream.id
                         });
-                        console.log(`Stream associated with peer connection for ${remoteUserId}`);
-                    } else {
-                        console.warn(`No existing peer connection found for stream from ${remoteUserId}`);
-                    }
 
-                    return newConnections;
-                });
+                        if (existingConnection) {
+                            const updatedConnection = {
+                                ...existingConnection,
+                                stream: remoteStream,
+                                streamId: remoteStream.id,
+                                lastStreamUpdate: Date.now()
+                            };
+
+                            newConnections.set(remoteUserId, updatedConnection);
+                            console.log(`✅ Stream successfully associated with peer connection for ${remoteUserId}`);
+
+                            // Force a re-render by creating a completely new Map
+                            return new Map(newConnections);
+                        } else {
+                            console.warn(`❌ No existing peer connection found for stream from ${remoteUserId}`);
+                            return currentConnections;
+                        }
+                    });
+                }, 0);
 
                 // Monitor stream health
                 remoteStream.addEventListener('addtrack', (e) => {
-                    console.log(`Track added to remote stream from ${remoteUserId}:`, e.track.kind);
+                    console.log(`➕ Track added to remote stream from ${remoteUserId}:`, e.track.kind);
                 });
 
                 remoteStream.addEventListener('removetrack', (e) => {
-                    console.log(`Track removed from remote stream from ${remoteUserId}:`, e.track.kind);
+                    console.log(`➖ Track removed from remote stream from ${remoteUserId}:`, e.track.kind);
                 });
             } else {
-                console.warn(`No streams in track event from ${remoteUserId}`);
+                console.warn(`❌ No streams in track event from ${remoteUserId}`);
             }
         };
 
@@ -217,9 +251,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                             candidate: event.candidate.candidate,
                             sdpMid: event.candidate.sdpMid,
                             sdpMLineIndex: event.candidate.sdpMLineIndex,
-                            usernameFragment: event.candidate.usernameFragment,
-                            type: event.candidate.type,
-                            protocol: event.candidate.protocol
+                            usernameFragment: event.candidate.usernameFragment
                         },
                         targetUserId: remoteUserId,
                         userId: latestUser.id
@@ -417,29 +449,50 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         const eventData = Array.isArray(data) ? data[0] : data;
         const { userId: remoteUserId, sdp, roomId: eventRoomId } = eventData;
 
-        console.log('Processing answer:', {
+        console.log('🔄 ANSWER RECEIVED:', {
             remoteUserId,
             eventRoomId,
             currentRoom,
-            existingConnections: Array.from(peerConnections.keys())
+            existingConnections: Array.from(peerConnections.keys()),
+            rawData: data
         });
 
         const existingConnection = peerConnections.get(remoteUserId);
         const pc = existingConnection?.pc;
 
         if (pc) {
+            console.log('🔍 PC state before processing answer:', {
+                connectionState: pc.connectionState,
+                signalingState: pc.signalingState,
+                iceConnectionState: pc.iceConnectionState,
+                hasLocalDescription: !!pc.localDescription,
+                hasRemoteDescription: !!pc.remoteDescription
+            });
+
             try {
                 if (pc.signalingState === 'stable') {
-                    console.log('Warning: RTCPeerConnection is already stable');
+                    console.log('⚠️ Warning: RTCPeerConnection is already stable');
                     return;
                 }
+
+                if (pc.signalingState !== 'have-local-offer') {
+                    console.log('⚠️ Warning: Expected have-local-offer but got:', pc.signalingState);
+                }
+
+                console.log('🔄 Setting remote description from answer...');
                 await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-                console.log('Successfully set remote description from answer');
+
+                console.log('✅ Successfully set remote description from answer. New state:', {
+                    connectionState: pc.connectionState,
+                    signalingState: pc.signalingState,
+                    iceConnectionState: pc.iceConnectionState
+                });
             } catch (error) {
-                console.error('Error handling answer:', error);
+                console.error('❌ Error handling answer:', error);
+                console.log('Answer SDP that failed:', sdp);
             }
         } else {
-            console.warn('No peer connection found for:', remoteUserId, 'Creating new connection');
+            console.warn('❌ No peer connection found for:', remoteUserId, 'Creating new connection');
             // Try to create a new connection if we don't have one
             createPeerConnection(remoteUserId, false);
         }
@@ -602,18 +655,52 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             setLocalStream(stream);
 
             // Add tracks to existing peer connections with proper locking
-            console.log('Adding tracks to existing peer connections:', peerConnections.size);
+            console.log('🎵 ATTEMPTING TO ADD TRACKS TO EXISTING CONNECTIONS:', {
+                connectionsCount: peerConnections.size,
+                streamTracks: stream.getTracks().length,
+                connections: Array.from(peerConnections.keys())
+            });
+
+            if (peerConnections.size === 0) {
+                console.log('⚠️ No existing peer connections to add tracks to');
+            }
+
             peerConnections.forEach(({ pc, addLocalTracksToConnection, connectionLock, remoteUserId }) => {
+                console.log(`🔍 Checking connection ${remoteUserId}:`, {
+                    hasPc: !!pc,
+                    hasAddFunction: !!addLocalTracksToConnection,
+                    hasLock: !!connectionLock,
+                    tracksAlreadyAdded: connectionLock?.tracksAdded,
+                    isAddingTracks: connectionLock?.isAddingTracks,
+                    pcState: pc?.connectionState,
+                    sendersCount: pc?.getSenders().length
+                });
+
                 if (pc && addLocalTracksToConnection && !connectionLock?.tracksAdded) {
-                    console.log(`Adding tracks to existing connection for ${remoteUserId}`);
+                    console.log(`🎵 Adding tracks to existing connection for ${remoteUserId}`);
                     addLocalTracksToConnection(stream);
                 } else if (connectionLock?.tracksAdded) {
-                    console.log(`Tracks already added to connection for ${remoteUserId}`);
+                    console.log(`✅ Tracks already added to connection for ${remoteUserId}`);
+                } else if (!pc) {
+                    console.warn(`❌ No peer connection for ${remoteUserId}`);
+                } else if (!addLocalTracksToConnection) {
+                    console.warn(`❌ No addLocalTracksToConnection function for ${remoteUserId}`);
+                    // Fallback: manually add tracks
+                    console.log(`🔧 Fallback: manually adding tracks to ${remoteUserId}`);
+                    try {
+                        stream.getTracks().forEach((track, index) => {
+                            console.log(`🎵 Manually adding track ${index} (${track.kind}) to ${remoteUserId}`);
+                            pc.addTrack(track, stream);
+                        });
+                    } catch (error) {
+                        console.error(`❌ Failed to manually add tracks to ${remoteUserId}:`, error);
+                    }
                 } else {
-                    console.warn(`Cannot add tracks to connection for ${remoteUserId}:`, {
+                    console.warn(`❌ Cannot add tracks to connection for ${remoteUserId}:`, {
                         hasPc: !!pc,
                         hasAddFunction: !!addLocalTracksToConnection,
-                        hasLock: !!connectionLock
+                        hasLock: !!connectionLock,
+                        tracksAdded: connectionLock?.tracksAdded
                     });
                 }
             });
@@ -658,48 +745,407 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
     // Utility function to validate stream integrity
     const validateStreamIntegrity = useCallback(() => {
-        console.log('Validating stream integrity across all connections:');
+        console.log('🔍 STREAM INTEGRITY VALIDATION REPORT');
+        console.log('=====================================');
 
-        peerConnections.forEach(({ pc, remoteUserId, stream, streamId }) => {
+        const report = {
+            timestamp: new Date().toISOString(),
+            localStream: null,
+            connections: [],
+            summary: {
+                totalConnections: peerConnections.size,
+                healthyConnections: 0,
+                problematicConnections: 0,
+                totalSenders: 0,
+                totalReceivers: 0,
+                streamMismatches: [],
+                issues: []
+            }
+        };
+
+        // Validate local stream
+        if (localStream) {
+            report.localStream = {
+                id: localStream.id,
+                active: localStream.active,
+                tracks: localStream.getTracks().map(track => ({
+                    kind: track.kind,
+                    id: track.id,
+                    label: track.label,
+                    enabled: track.enabled,
+                    readyState: track.readyState,
+                    muted: track.muted
+                })),
+                videoTracks: localStream.getVideoTracks().length,
+                audioTracks: localStream.getAudioTracks().length
+            };
+            console.log('📹 Local Stream:', report.localStream);
+        } else {
+            console.log('❌ No local stream available');
+            report.summary.issues.push('No local stream available');
+        }
+
+        // Validate each peer connection
+        peerConnections.forEach(({ pc, remoteUserId, stream, streamId, connectionLock, localTracksAdded }) => {
+            const connectionReport = {
+                userId: remoteUserId,
+                healthy: true,
+                issues: [],
+                connection: null,
+                senders: [],
+                receivers: [],
+                remoteStream: null
+            };
+
             if (pc) {
                 const senders = pc.getSenders();
                 const receivers = pc.getReceivers();
 
-                console.log(`Connection ${remoteUserId}:`, {
+                connectionReport.connection = {
                     connectionState: pc.connectionState,
                     signalingState: pc.signalingState,
+                    iceConnectionState: pc.iceConnectionState,
+                    iceGatheringState: pc.iceGatheringState,
+                    localTracksAdded: localTracksAdded || connectionLock?.tracksAdded,
                     sendersCount: senders.length,
-                    receiversCount: receivers.length,
-                    hasRemoteStream: !!stream,
-                    remoteStreamId: streamId,
-                    remoteStreamActive: stream?.active
-                });
+                    receiversCount: receivers.length
+                };
 
-                // Validate senders
+                // Validate connection states
+                if (pc.connectionState !== 'connected' && pc.connectionState !== 'connecting') {
+                    connectionReport.healthy = false;
+                    connectionReport.issues.push(`Connection state: ${pc.connectionState}`);
+                }
+
+                if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+                    connectionReport.healthy = false;
+                    connectionReport.issues.push(`ICE connection state: ${pc.iceConnectionState}`);
+                }
+
+                // Check if tracks should have been added but weren't
+                if (senders.length === 0) {
+                    connectionReport.healthy = false;
+                    connectionReport.issues.push(`No senders - tracks not added to connection`);
+
+                    if (localStream) {
+                        connectionReport.issues.push(`Local stream available but not added (${localStream.getTracks().length} tracks)`);
+                    } else {
+                        connectionReport.issues.push(`No local stream available`);
+                    }
+                }
+
+                // Check signaling state issues
+                if (pc.signalingState === 'have-local-offer' || pc.signalingState === 'have-remote-offer') {
+                    connectionReport.healthy = false;
+                    connectionReport.issues.push(`Stuck in signaling state: ${pc.signalingState}`);
+                }
+
+                // Check if connection is stuck
+                if (pc.connectionState === 'new' && connectionReport.connection.created) {
+                    const ageMinutes = (Date.now() - connectionReport.connection.created) / (1000 * 60);
+                    if (ageMinutes > 1) {
+                        connectionReport.healthy = false;
+                        connectionReport.issues.push(`Connection stuck in 'new' state for ${ageMinutes.toFixed(1)} minutes`);
+                    }
+                }
+
+                // Validate senders (outgoing tracks)
                 senders.forEach((sender, index) => {
+                    const senderInfo = {
+                        index,
+                        hasTrack: !!sender.track,
+                        track: null
+                    };
+
                     if (sender.track) {
-                        console.log(`  Sender ${index}:`, {
-                            trackKind: sender.track.kind,
-                            trackId: sender.track.id,
-                            trackEnabled: sender.track.enabled,
-                            trackReadyState: sender.track.readyState
-                        });
+                        senderInfo.track = {
+                            kind: sender.track.kind,
+                            id: sender.track.id,
+                            enabled: sender.track.enabled,
+                            readyState: sender.track.readyState,
+                            muted: sender.track.muted
+                        };
+
+                        // Check if sender track matches local stream
+                        if (localStream) {
+                            const matchingTrack = localStream.getTracks().find(t => t.id === sender.track.id);
+                            if (!matchingTrack) {
+                                connectionReport.healthy = false;
+                                connectionReport.issues.push(`Sender track ${sender.track.id} not found in local stream`);
+                                report.summary.streamMismatches.push({
+                                    connection: remoteUserId,
+                                    issue: 'Sender track mismatch',
+                                    trackId: sender.track.id
+                                });
+                            }
+                        }
+                    } else {
+                        connectionReport.healthy = false;
+                        connectionReport.issues.push(`Sender ${index} has no track`);
                     }
+
+                    connectionReport.senders.push(senderInfo);
                 });
 
-                // Validate receivers
+                // Validate receivers (incoming tracks)
                 receivers.forEach((receiver, index) => {
+                    const receiverInfo = {
+                        index,
+                        hasTrack: !!receiver.track,
+                        track: null
+                    };
+
                     if (receiver.track) {
-                        console.log(`  Receiver ${index}:`, {
-                            trackKind: receiver.track.kind,
-                            trackId: receiver.track.id,
-                            trackReadyState: receiver.track.readyState
+                        receiverInfo.track = {
+                            kind: receiver.track.kind,
+                            id: receiver.track.id,
+                            readyState: receiver.track.readyState,
+                            muted: receiver.track.muted
+                        };
+                    }
+
+                    connectionReport.receivers.push(receiverInfo);
+                });
+
+                // Validate remote stream
+                if (stream) {
+                    connectionReport.remoteStream = {
+                        id: stream.id,
+                        active: stream.active,
+                        tracks: stream.getTracks().map(track => ({
+                            kind: track.kind,
+                            id: track.id,
+                            readyState: track.readyState,
+                            muted: track.muted
+                        })),
+                        videoTracks: stream.getVideoTracks().length,
+                        audioTracks: stream.getAudioTracks().length
+                    };
+
+                    // Check if remote stream matches receivers
+                    const receiverTrackIds = receivers.map(r => r.track?.id).filter(Boolean);
+                    const streamTrackIds = stream.getTracks().map(t => t.id);
+
+                    const missingInStream = receiverTrackIds.filter(id => !streamTrackIds.includes(id));
+                    const missingInReceivers = streamTrackIds.filter(id => !receiverTrackIds.includes(id));
+
+                    if (missingInStream.length > 0 || missingInReceivers.length > 0) {
+                        connectionReport.healthy = false;
+                        connectionReport.issues.push('Remote stream and receivers mismatch');
+                        report.summary.streamMismatches.push({
+                            connection: remoteUserId,
+                            issue: 'Remote stream mismatch',
+                            missingInStream,
+                            missingInReceivers
                         });
                     }
+                } else {
+                    if (receivers.some(r => r.track)) {
+                        connectionReport.healthy = false;
+                        connectionReport.issues.push('Has receiver tracks but no remote stream');
+                    }
+                }
+
+                report.summary.totalSenders += senders.length;
+                report.summary.totalReceivers += receivers.length;
+            } else {
+                connectionReport.healthy = false;
+                connectionReport.issues.push('No peer connection object');
+            }
+
+            if (connectionReport.healthy) {
+                report.summary.healthyConnections++;
+                console.log(`✅ Connection ${remoteUserId}: HEALTHY`);
+            } else {
+                report.summary.problematicConnections++;
+                console.log(`❌ Connection ${remoteUserId}: ISSUES FOUND`);
+                connectionReport.issues.forEach(issue => {
+                    console.log(`   - ${issue}`);
                 });
             }
+
+            console.log(`📊 Connection ${remoteUserId} Details:`, connectionReport);
+            report.connections.push(connectionReport);
         });
+
+        // Generate summary
+        console.log('\n📋 VALIDATION SUMMARY');
+        console.log('====================');
+        console.log(`Total Connections: ${report.summary.totalConnections}`);
+        console.log(`Healthy Connections: ${report.summary.healthyConnections}`);
+        console.log(`Problematic Connections: ${report.summary.problematicConnections}`);
+        console.log(`Total Senders: ${report.summary.totalSenders}`);
+        console.log(`Total Receivers: ${report.summary.totalReceivers}`);
+        console.log(`Stream Mismatches: ${report.summary.streamMismatches.length}`);
+
+        if (report.summary.issues.length > 0) {
+            console.log('\n⚠️  GLOBAL ISSUES:');
+            report.summary.issues.forEach(issue => console.log(`   - ${issue}`));
+        }
+
+        if (report.summary.streamMismatches.length > 0) {
+            console.log('\n🔄 STREAM MISMATCHES:');
+            report.summary.streamMismatches.forEach(mismatch => {
+                console.log(`   - ${mismatch.connection}: ${mismatch.issue}`);
+            });
+        }
+
+        // Overall health status
+        const overallHealthy = report.summary.problematicConnections === 0 &&
+            report.summary.issues.length === 0 &&
+            report.summary.streamMismatches.length === 0;
+
+        console.log(`\n🎯 OVERALL STATUS: ${overallHealthy ? '✅ HEALTHY' : '❌ ISSUES DETECTED'}`);
+        console.log('=====================================\n');
+
+        // Return the report for programmatic use
+        return report;
+    }, [peerConnections, localStream]);
+
+    // Debug function to check current peer connections state
+    const debugPeerConnections = useCallback(() => {
+        console.log('🔍 CURRENT PEER CONNECTIONS DEBUG:');
+        console.log('==================================');
+
+        peerConnections.forEach(({ pc, remoteUserId, stream, streamId }, userId) => {
+            console.log(`Connection ${userId}:`, {
+                remoteUserId,
+                hasPC: !!pc,
+                hasStream: !!stream,
+                streamId,
+                streamActive: stream?.active,
+                streamTracks: stream?.getTracks().length || 0,
+                pcState: pc?.connectionState,
+                pcSignaling: pc?.signalingState,
+                pcICE: pc?.iceConnectionState
+            });
+        });
+
+        console.log('==================================');
     }, [peerConnections]);
+
+    // Manual function to add tracks to all connections (for debugging)
+    const manuallyAddTracksToAllConnections = useCallback(() => {
+        console.log('🔧 MANUALLY ADDING TRACKS TO ALL CONNECTIONS');
+
+        if (!localStream) {
+            console.log('❌ No local stream available');
+            return;
+        }
+
+        console.log('🎵 Local stream details:', {
+            id: localStream.id,
+            tracks: localStream.getTracks().length,
+            active: localStream.active
+        });
+
+        peerConnections.forEach(({ pc, remoteUserId }) => {
+            if (pc) {
+                const currentSenders = pc.getSenders();
+                console.log(`🔍 Connection ${remoteUserId} current state:`, {
+                    senders: currentSenders.length,
+                    connectionState: pc.connectionState,
+                    signalingState: pc.signalingState
+                });
+
+                if (currentSenders.length === 0) {
+                    console.log(`🎵 Adding tracks manually to ${remoteUserId}`);
+                    try {
+                        localStream.getTracks().forEach((track, index) => {
+                            console.log(`🎵 Adding track ${index} (${track.kind})`);
+                            const sender = pc.addTrack(track, localStream);
+                            console.log(`✅ Track added:`, {
+                                kind: track.kind,
+                                id: track.id,
+                                senderId: sender.track?.id
+                            });
+                        });
+                        console.log(`✅ Tracks added to ${remoteUserId}. New sender count:`, pc.getSenders().length);
+                    } catch (error) {
+                        console.error(`❌ Failed to add tracks to ${remoteUserId}:`, error);
+                    }
+                } else {
+                    console.log(`✅ Connection ${remoteUserId} already has ${currentSenders.length} senders`);
+                }
+            }
+        });
+    }, [localStream, peerConnections]);
+
+    // Function to diagnose and attempt to fix common issues
+    const diagnoseAndFix = useCallback(() => {
+        console.log('🔧 DIAGNOSING AND ATTEMPTING TO FIX ISSUES');
+        console.log('==========================================');
+
+        const fixes = [];
+
+        // Check if local stream exists but tracks aren't added
+        if (localStream && localStream.getTracks().length > 0) {
+            console.log('✅ Local stream available:', {
+                id: localStream.id,
+                tracks: localStream.getTracks().length,
+                active: localStream.active
+            });
+
+            // Try to add tracks to connections that don't have senders
+            peerConnections.forEach(({ pc, remoteUserId, addLocalTracksToConnection, connectionLock }) => {
+                if (pc) {
+                    const senders = pc.getSenders();
+                    console.log(`Connection ${remoteUserId} has ${senders.length} senders`);
+
+                    if (senders.length === 0 && addLocalTracksToConnection && !connectionLock?.tracksAdded) {
+                        console.log(`🔧 Attempting to add tracks to ${remoteUserId}`);
+                        try {
+                            addLocalTracksToConnection(localStream);
+                            fixes.push(`Added tracks to connection ${remoteUserId}`);
+                        } catch (error) {
+                            console.error(`Failed to add tracks to ${remoteUserId}:`, error);
+                            fixes.push(`Failed to add tracks to ${remoteUserId}: ${error.message}`);
+                        }
+                    } else if (senders.length === 0) {
+                        console.log(`🔧 Manually adding tracks to ${remoteUserId}`);
+                        try {
+                            localStream.getTracks().forEach(track => {
+                                pc.addTrack(track, localStream);
+                            });
+                            fixes.push(`Manually added tracks to connection ${remoteUserId}`);
+                        } catch (error) {
+                            console.error(`Failed to manually add tracks to ${remoteUserId}:`, error);
+                            fixes.push(`Failed to manually add tracks to ${remoteUserId}: ${error.message}`);
+                        }
+                    }
+                }
+            });
+        } else {
+            console.log('❌ No local stream available - cannot add tracks');
+            fixes.push('No local stream available - start video first');
+        }
+
+        // Check for stuck connections and attempt renegotiation
+        peerConnections.forEach(({ pc, remoteUserId }) => {
+            if (pc) {
+                if (pc.signalingState === 'have-local-offer') {
+                    console.log(`🔧 Connection ${remoteUserId} stuck with local offer - may need to restart negotiation`);
+                    fixes.push(`Connection ${remoteUserId} stuck with local offer`);
+                }
+
+                if (pc.iceConnectionState === 'failed') {
+                    console.log(`🔧 ICE connection failed for ${remoteUserId} - may need to restart`);
+                    fixes.push(`ICE connection failed for ${remoteUserId}`);
+                }
+
+                if (pc.connectionState === 'failed') {
+                    console.log(`🔧 Connection failed for ${remoteUserId} - needs restart`);
+                    fixes.push(`Connection failed for ${remoteUserId} - needs restart`);
+                }
+            }
+        });
+
+        console.log('🔧 FIXES ATTEMPTED:');
+        fixes.forEach(fix => console.log(`   - ${fix}`));
+        console.log('==========================================\n');
+
+        return fixes;
+    }, [localStream, peerConnections]);
 
     // Connect to server on mount
     useEffect(() => {
@@ -837,8 +1283,26 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                     <div className="current-room">
                         <p>Current Room: {currentRoom}</p>
                         <button onClick={leaveRoom}>Leave Room</button>
-                        <button onClick={validateStreamIntegrity} style={{ marginLeft: '10px' }}>
+                        <button
+                            onClick={() => {
+                                const result = validateStreamIntegrity();
+                                setStreamValidationResult(result);
+                            }}
+                            style={{ marginLeft: '10px' }}
+                        >
                             Validate Streams
+                        </button>
+                        <button
+                            onClick={debugPeerConnections}
+                            style={{ marginLeft: '10px' }}
+                        >
+                            Debug Connections
+                        </button>
+                        <button
+                            onClick={manuallyAddTracksToAllConnections}
+                            style={{ marginLeft: '10px' }}
+                        >
+                            Force Add Tracks
                         </button>
                     </div>
                 )}
@@ -853,16 +1317,24 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                 />
 
                 <div className="remote-streams">
-                    {Array.from(peerConnections.entries()).map(([userId, { stream }]) => (
-                        stream && (
+                    {Array.from(peerConnections.entries()).map(([userId, connectionData]) => {
+                        const { stream, streamId, lastStreamUpdate } = connectionData;
+                        console.log(`🎥 Rendering stream for ${userId}:`, {
+                            hasStream: !!stream,
+                            streamId,
+                            streamActive: stream?.active,
+                            lastUpdate: lastStreamUpdate
+                        });
+
+                        return stream && (
                             <VideoStream
-                                key={userId}
+                                key={`${userId}-${streamId || 'no-id'}-${lastStreamUpdate || 0}`}
                                 stream={stream}
                                 isLocal={false}
                                 userId={userId}
                             />
-                        )
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
 
@@ -877,6 +1349,81 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                     state
                 }))}
             />
+
+            {streamValidationResult && (
+                <div className="stream-validation-result" style={{
+                    margin: '20px 0',
+                    padding: '15px',
+                    border: '1px solid #ccc',
+                    borderRadius: '5px',
+                    backgroundColor: streamValidationResult.summary.problematicConnections === 0 ? '#d4edda' : '#f8d7da'
+                }}>
+                    <h3>Stream Validation Results</h3>
+                    <p><strong>Timestamp:</strong> {new Date(streamValidationResult.timestamp).toLocaleString()}</p>
+                    <p><strong>Status:</strong> {
+                        streamValidationResult.summary.problematicConnections === 0 &&
+                            streamValidationResult.summary.issues.length === 0 ?
+                            '✅ All streams healthy' :
+                            '❌ Issues detected'
+                    }</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px', marginTop: '10px' }}>
+                        <div>
+                            <strong>Connections:</strong> {streamValidationResult.summary.totalConnections}
+                        </div>
+                        <div>
+                            <strong>Healthy:</strong> {streamValidationResult.summary.healthyConnections}
+                        </div>
+                        <div>
+                            <strong>Issues:</strong> {streamValidationResult.summary.problematicConnections}
+                        </div>
+                        <div>
+                            <strong>Senders:</strong> {streamValidationResult.summary.totalSenders}
+                        </div>
+                        <div>
+                            <strong>Receivers:</strong> {streamValidationResult.summary.totalReceivers}
+                        </div>
+                        <div>
+                            <strong>Mismatches:</strong> {streamValidationResult.summary.streamMismatches.length}
+                        </div>
+                    </div>
+
+                    {streamValidationResult.localStream && (
+                        <div style={{ marginTop: '10px' }}>
+                            <strong>Local Stream:</strong> {streamValidationResult.localStream.active ? '✅' : '❌'}
+                            ({streamValidationResult.localStream.videoTracks}V, {streamValidationResult.localStream.audioTracks}A)
+                        </div>
+                    )}
+
+                    {streamValidationResult.summary.issues.length > 0 && (
+                        <div style={{ marginTop: '10px' }}>
+                            <strong>Global Issues:</strong>
+                            <ul>
+                                {streamValidationResult.summary.issues.map((issue, index) => (
+                                    <li key={index}>{issue}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
+                    {streamValidationResult.summary.streamMismatches.length > 0 && (
+                        <div style={{ marginTop: '10px' }}>
+                            <strong>Stream Mismatches:</strong>
+                            <ul>
+                                {streamValidationResult.summary.streamMismatches.map((mismatch, index) => (
+                                    <li key={index}>{mismatch.connection}: {mismatch.issue}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
+                    <button
+                        onClick={() => setStreamValidationResult(null)}
+                        style={{ marginTop: '10px', padding: '5px 10px' }}
+                    >
+                        Clear Results
+                    </button>
+                </div>
+            )}
 
             <EventLog />
         </div>
