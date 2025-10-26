@@ -1,0 +1,219 @@
+#root {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.app {
+  font-family: Arial, sans-serif;
+  background-color: #f5f5f5;
+}
+
+.container {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  margin-bottom: 20px;
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: bold;
+}
+
+input,
+button {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+input {
+  width: 200px;
+}
+
+button {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  cursor: pointer;
+  margin-right: 10px;
+}
+
+button:hover {
+  background-color: #0056b3;
+}
+
+button:disabled {
+  background-color: #6c757d;
+  cursor: not-allowed;
+}
+
+.status {
+  padding: 10px;
+  border-radius: 4px;
+  margin-bottom: 15px;
+}
+
+.status.connected {
+  background-color: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.status.disconnected {
+  background-color: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+.status.connecting {
+  background-color: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeaa7;
+}
+
+.video-container {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.video-box {
+  flex: 1;
+  min-width: 300px;
+  margin-bottom: 20px;
+}
+
+video {
+  width: 100%;
+  max-width: 400px;
+  height: 300px;
+  background-color: #000;
+  border-radius: 8px;
+}
+
+.video-controls {
+  margin-top: 10px;
+}
+
+.room-controls {
+  margin: 20px 0;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+}
+
+.join-room-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.current-room {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.current-room p {
+  margin: 0;
+  font-weight: bold;
+}
+
+.user-list-container {
+  margin: 20px 0;
+}
+
+.user-list {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.user-badge {
+  background-color: #007bff;
+  color: white;
+  padding: 5px 10px;
+  border-radius: 15px;
+  font-size: 12px;
+}
+
+.user-badge.self {
+  background-color: #28a745;
+}
+
+.event-log {
+  margin-top: 20px;
+}
+
+.log {
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 15px;
+  height: 200px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.log-entry {
+  margin-bottom: 5px;
+  padding: 2px 0;
+}
+
+.log-entry.info {
+  color: #0066cc;
+}
+
+.log-entry.error {
+  color: #cc0000;
+}
+
+.log-entry.success {
+  color: #009900;
+}
+
+.peer-connections {
+  margin-top: 20px;
+}
+
+.peer-connection {
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.connection-state {
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.connection-state.connected {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.connection-state.connecting {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.connection-state.disconnected {
+  background-color: #f8d7da;
+  color: #721c24;
+}
