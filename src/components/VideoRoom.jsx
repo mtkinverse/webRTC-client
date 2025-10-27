@@ -55,8 +55,13 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         // Receive stream from remote client and add to remote video area
         pc.ontrack = (event) => {
             const streams = event.streams;
-            const stream = streams[0]
+            const stream = streams[0];
             console.log('Remote track received from:', remoteUserId, 'Stream:', stream);
+            console.log('Stream tracks:', stream?.getTracks());
+            console.log('Stream video tracks:', stream?.getVideoTracks());
+            console.log('Stream audio tracks:', stream?.getAudioTracks());
+            console.log('Stream active:', stream?.active);
+
             if (stream) {
                 // Set remote video directly (following your original pattern)
                 setRemoteVideo(stream);
@@ -72,7 +77,6 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                     return newConnections;
                 });
             }
-
         };
 
         // Store the peer connection

@@ -4,11 +4,31 @@ const VideoStream = ({ stream, isLocal, userId, onStart, onStop }) => {
     const videoRef = useRef(null);
 
     useEffect(() => {
-        if (videoRef.current && stream) {
-            console.log(`🎥 Setting ${isLocal ? 'local' : 'remote'} stream:`, stream);
-            videoRef.current.srcObject = stream;
+        const video = videoRef.current;
+        if (!video || !stream) return;
+
+        console.log(`🎥 Attaching ${isLocal ? 'local' : 'remote'} stream`);
+
+        // Important: stop re-assigning if same stream
+        if (video.srcObject !== stream) {
+            video.srcObject = stream;
         }
-    }, [stream, isLocal]);
+
+        const handleMetadata = async () => {
+            try {
+                await video.play();
+                console.log(`✅ ${isLocal ? 'local' : 'remote'} video is playing`);
+            } catch (err) {
+                console.error(`❌ play() failed:`, err);
+            }
+        };
+
+        video.onloadedmetadata = handleMetadata;
+
+        return () => {
+            video.onloadedmetadata = null; // cleanup
+        };
+    }, [stream]);
 
     return (
         <div className="video-box">
@@ -18,6 +38,7 @@ const VideoStream = ({ stream, isLocal, userId, onStart, onStop }) => {
                 autoPlay
                 playsInline
                 muted={isLocal}
+                style={{ width: "100%", background: "black" }}
             />
             {isLocal && (
                 <div className="video-controls">
