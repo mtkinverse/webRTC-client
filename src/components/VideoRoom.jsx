@@ -113,8 +113,8 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     };
 
     // Receive Offer From Other Client
-    const handleOffer = async (socketId, description) => {
-        console.log('Received offer from:', socketId);
+    const handleOffer = async ({ roomId, userId, sdp }) => {
+        console.log('Received offer from:', userId);
 
         // Initialize peer connection
         const pc = new RTCPeerConnection(iceServers);
@@ -130,13 +130,13 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         // Send candidates to establish channel communication
         pc.onicecandidate = ({ candidate }) => {
             if (candidate && socketRef.current) {
-                socketRef.current.emit('webrtc', { type: 'ice-candidate', socketId, candidate });
+                socketRef.current.emit('webrtc', { type: 'ice-candidate', roomId, candidate });
             }
         };
 
         // Receive stream from remote client and add to remote video area
         pc.ontrack = ({ streams: [stream] }) => {
-            console.log('Remote track received in handleOffer from:', socketId, 'Stream:', stream);
+            console.log('Remote track received in handleOffer from:', userId, 'Stream:', stream);
             if (stream) {
                 // Set remote video directly (following your original pattern)
                 setRemoteVideo(stream);
@@ -148,7 +148,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                         stream,
                         remoteUserId: socketId
                     });
-                    console.log('Updated peer connections with remote stream for:', socketId);
+                    console.log('Updated peer connections with remote stream for:', userId);
                     return newConnections;
                 });
             }
@@ -156,19 +156,19 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
         try {
             // Set Local And Remote description and create answer
-            await pc.setRemoteDescription(description);
+            await pc.setRemoteDescription(sdp);
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
 
-            socketRef.current.emit('webrtc', { type: 'answer', roomtId: currentRoom, sdp: pc.localDescription });
+            socketRef.current.emit('webrtc', { type: 'answer', roomId, sdp: answer });
         } catch (error) {
             console.error('Error handling offer:', error);
         }
     };
 
     // Receive Answer to establish peer connection
-    const handleAnswer = async (description) => {
-        console.log('Received answer');
+    const handleAnswer = async ({ roomId, userId, sdp: description }) => {
+        console.log('Received answer ', description, ' from ', userId);
 
         if (localConnectionRef.current) {
             try {
@@ -180,8 +180,8 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     };
 
     // Receive candidates and add to peer connection
-    const handleIceCandidate = async (candidate) => {
-        console.log('Received ICE candidate');
+    const handleIceCandidate = async ({ candidate }) => {
+        console.log('Received ICE candidate ', candidate);
 
         // Get Local or Remote Connection
         const conn = localConnectionRef.current || remoteConnectionRef.current;
@@ -192,7 +192,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             } catch (error) {
                 console.error('Error adding ICE candidate:', error);
             }
-        }
+        } else console.warn('Connection not foudn for forwarding ice-candidate')
     };
 
     const connectToServer = async (serverUrl, userData) => {
@@ -225,6 +225,65 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         socketRef.current = newSocket;
         setConnectionStatus('connecting');
 
+
+        newSocket.on('connect', () => {
+            setConnectionStatus('connected');
+        });
+
+        newSocket.on('disconnect', () => {
+            setConnectionStatus('disconnected');
+            peerConnections.forEach(({ pc }) => pc?.close());
+            setPeerConnections(new Map());
+            onDisconnect?.();
+        });
+
+        newSocket.on('room-update', (data) => {
+            console.log('Raw room-update event:', data);
+            const payload = data[0];
+            if (payload && payload.users) {
+                console.log('Setting users:', payload.users);
+                const newUsers = payload.users;
+                setUsers(newUsers);
+
+                // Only update room ID if we're not already in a room
+                if (!currentRoomRef.current) {
+                    console.log('Setting initial room:', payload.roomId);
+                    setCurrentRoom(payload.roomId);
+                    currentRoomRef.current = payload.roomId;
+                }
+
+                console.log('Room update processed - Room:', payload.roomId, 'Users:', newUsers.length);
+
+                // If we have local video stream, initiate connections with new users
+                if (localStreamRef.current) {
+                    console.log('Processing new users with existing local stream:', {
+                        streamId: localStreamRef.current.id,
+                        streamActive: localStreamRef.current.active,
+                        newUsers: newUsers.length,
+                        existingConnections: peerConnections.size
+                    });
+
+                    newUsers.forEach(user => {
+                        // Don't create connection with ourselves or existing connections
+                        if (user !== currentUserRef.current?.id && !peerConnections.has(user)) {
+                            console.log('New user joined, initiating connection with:', user);
+                            createPeerConnection(user, true);
+                        } else if (user === currentUserRef.current?.id) {
+                            console.log('Skipping self connection:', user);
+                        } else {
+                            console.log('Connection already exists for user:', user);
+                        }
+                    });
+                }
+            } else {
+                console.warn('Invalid room-update payload:', payload);
+            }
+        });
+
+
+        newSocket.on('offer', (socketId, description) => handleOffer(socketId, description));
+        newSocket.on('answer', (description) => handleAnswer(description));
+        newSocket.on('candidate', (candidate) => handleIceCandidate(candidate));
         return newSocket;
     };
 
@@ -338,64 +397,64 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     useEffect(() => {
         if (!socket) return;
 
-        socket.on('connect', () => {
-            setConnectionStatus('connected');
-        });
+        // socket.on('connect', () => {
+        //     setConnectionStatus('connected');
+        // });
 
-        socket.on('disconnect', () => {
-            setConnectionStatus('disconnected');
-            peerConnections.forEach(({ pc }) => pc?.close());
-            setPeerConnections(new Map());
-            onDisconnect?.();
-        });
+        // socket.on('disconnect', () => {
+        //     setConnectionStatus('disconnected');
+        //     peerConnections.forEach(({ pc }) => pc?.close());
+        //     setPeerConnections(new Map());
+        //     onDisconnect?.();
+        // });
 
-        socket.on('room-update', (data) => {
-            console.log('Raw room-update event:', data);
-            const payload = data[0];
-            if (payload && payload.users) {
-                console.log('Setting users:', payload.users);
-                const newUsers = payload.users;
-                setUsers(newUsers);
+        // socket.on('room-update', (data) => {
+        //     console.log('Raw room-update event:', data);
+        //     const payload = data[0];
+        //     if (payload && payload.users) {
+        //         console.log('Setting users:', payload.users);
+        //         const newUsers = payload.users;
+        //         setUsers(newUsers);
 
-                // Only update room ID if we're not already in a room
-                if (!currentRoomRef.current) {
-                    console.log('Setting initial room:', payload.roomId);
-                    setCurrentRoom(payload.roomId);
-                    currentRoomRef.current = payload.roomId;
-                }
+        //         // Only update room ID if we're not already in a room
+        //         if (!currentRoomRef.current) {
+        //             console.log('Setting initial room:', payload.roomId);
+        //             setCurrentRoom(payload.roomId);
+        //             currentRoomRef.current = payload.roomId;
+        //         }
 
-                console.log('Room update processed - Room:', payload.roomId, 'Users:', newUsers.length);
+        //         console.log('Room update processed - Room:', payload.roomId, 'Users:', newUsers.length);
 
-                // If we have local video stream, initiate connections with new users
-                if (localStreamRef.current) {
-                    console.log('Processing new users with existing local stream:', {
-                        streamId: localStreamRef.current.id,
-                        streamActive: localStreamRef.current.active,
-                        newUsers: newUsers.length,
-                        existingConnections: peerConnections.size
-                    });
+        //         // If we have local video stream, initiate connections with new users
+        //         if (localStreamRef.current) {
+        //             console.log('Processing new users with existing local stream:', {
+        //                 streamId: localStreamRef.current.id,
+        //                 streamActive: localStreamRef.current.active,
+        //                 newUsers: newUsers.length,
+        //                 existingConnections: peerConnections.size
+        //             });
 
-                    newUsers.forEach(user => {
-                        // Don't create connection with ourselves or existing connections
-                        if (user !== currentUserRef.current?.id && !peerConnections.has(user)) {
-                            console.log('New user joined, initiating connection with:', user);
-                            createPeerConnection(user, true);
-                        } else if (user === currentUserRef.current?.id) {
-                            console.log('Skipping self connection:', user);
-                        } else {
-                            console.log('Connection already exists for user:', user);
-                        }
-                    });
-                }
-            } else {
-                console.warn('Invalid room-update payload:', payload);
-            }
-        });
+        //             newUsers.forEach(user => {
+        //                 // Don't create connection with ourselves or existing connections
+        //                 if (user !== currentUserRef.current?.id && !peerConnections.has(user)) {
+        //                     console.log('New user joined, initiating connection with:', user);
+        //                     createPeerConnection(user, true);
+        //                 } else if (user === currentUserRef.current?.id) {
+        //                     console.log('Skipping self connection:', user);
+        //                 } else {
+        //                     console.log('Connection already exists for user:', user);
+        //                 }
+        //             });
+        //         }
+        //     } else {
+        //         console.warn('Invalid room-update payload:', payload);
+        //     }
+        // });
 
 
-        socket.on('offer', (socketId, description) => handleOffer(socketId, description));
-        socket.on('answer', (description) => handleAnswer(description));
-        socket.on('candidate', (candidate) => handleIceCandidate(candidate));
+        // socket.on('offer', (socketId, description) => handleOffer(socketId, description));
+        // socket.on('answer', (description) => handleAnswer(description));
+        // socket.on('candidate', (candidate) => handleIceCandidate(candidate));
         // socket.on('webrtc', (message) => {
         //     const data = JSON.parse(message);
         //     switch (data.type) {
