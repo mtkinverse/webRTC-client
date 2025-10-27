@@ -1,12 +1,15 @@
-import { useEffect, useRef } from "react";
+import React, { useEffect, useRef } from 'react';
 
-const VideoStream = ({ stream, isLocal, userId, onStart, onStop }) => {
+const VideoPlayer = React.memo(({ stream, isLocal = false, userId = '', onStart, onStop }) => {
     const videoRef = useRef(null);
     const streamRef = useRef(null); // Store current stream to track changes
 
     useEffect(() => {
         const video = videoRef.current;
-        if (!video || !stream) return;
+        if (!video || !stream) {
+            if (!stream) console.log('No stream provided');
+            return;
+        }
 
         console.log(`🎥 Attaching ${isLocal ? 'local' : 'remote'} stream`);
 
@@ -15,65 +18,68 @@ const VideoStream = ({ stream, isLocal, userId, onStart, onStop }) => {
             console.log('🎯 New stream detected:', stream.id);
             streamRef.current = stream;
 
+            // Validate stream
             const videoTracks = stream.getVideoTracks();
             const audioTracks = stream.getAudioTracks();
+
+            if (!videoTracks.length && !audioTracks.length) {
+                console.error('Invalid stream: No tracks');
+                return;
+            }
 
             console.log('Stream video tracks:', videoTracks);
             console.log('Stream audio tracks:', audioTracks);
             console.log('Video track states:', videoTracks.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })));
             console.log('Audio track states:', audioTracks.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })));
 
-            // Clear any existing srcObject first
+            // Clear existing srcObject
             if (video.srcObject) {
                 video.srcObject = null;
             }
 
-            // Set up event handlers BEFORE setting srcObject
+            // Set up event handlers
             const handleMetadata = async () => {
-                console.log("✅ metadata loaded - video dimensions:", video.videoWidth, "x", video.videoHeight);
-                console.log("✅ video readyState:", video.readyState);
+                console.log('✅ metadata loaded - video dimensions:', video.videoWidth, 'x', video.videoHeight);
+                console.log('✅ video readyState:', video.readyState);
 
-                // Force play for remote streams (they need user interaction bypass)
+                // Force play for remote streams
                 if (!isLocal) {
-                    video.muted = true; // Ensure remote video is muted to allow autoplay
+                    video.muted = true; // Mute remote streams to allow autoplay
                 }
 
                 try {
                     await video.play();
                     console.log(`✅ ${isLocal ? 'local' : 'remote'} video is playing`);
                 } catch (err) {
-                    console.error("❌ play() failed:", err);
-                    // Try again with muted
+                    console.error('❌ play() failed:', err);
                     if (!isLocal) {
                         video.muted = true;
                         try {
                             await video.play();
                             console.log(`✅ ${isLocal ? 'local' : 'remote'} video playing (muted)`);
                         } catch (err2) {
-                            console.error("❌ muted play() also failed:", err2);
+                            console.error('❌ muted play() also failed:', err2);
                         }
                     }
                 }
             };
 
-            const handleLoadStart = () => console.log("🔄 loadstart fired");
+            const handleLoadStart = () => console.log('🔄 loadstart fired');
             const handleLoadedData = () => {
-                console.log("📊 loadeddata fired - readyState:", video.readyState);
-                // Try to play as soon as we have data
+                console.log('📊 loadeddata fired - readyState:', video.readyState);
                 if (video.readyState >= 2) {
-                    video.play().catch(err => console.log("Early play attempt failed:", err));
+                    video.play().catch(err => console.error('Early play attempt failed:', err));
                 }
             };
             const handleCanPlay = () => {
-                console.log("✅ canplay fired - readyState:", video.readyState);
-                // Another opportunity to play
-                video.play().catch(err => console.log("CanPlay play attempt failed:", err));
+                console.log('✅ canplay fired - readyState:', video.readyState);
+                video.play().catch(err => console.error('CanPlay play attempt failed:', err));
             };
-            const handlePlay = () => console.log("✅ playing event fired");
-            const handlePlaying = () => console.log("✅ playing state reached");
+            const handlePlay = () => console.log('✅ playing event fired');
+            const handlePlaying = () => console.log('✅ playing state reached');
             const handleError = (e) => {
-                console.error("❌ video error:", e);
-                console.error("❌ video error details:", video.error);
+                console.error('❌ video error:', e);
+                console.error('❌ video error details:', video.error);
             };
 
             video.onloadstart = handleLoadStart;
@@ -84,66 +90,65 @@ const VideoStream = ({ stream, isLocal, userId, onStart, onStop }) => {
             video.onplaying = handlePlaying;
             video.onerror = handleError;
 
-            // Set srcObject AFTER event handlers are set up
-            console.log("🔄 Setting srcObject...");
+            // Set srcObject after event handlers
+            console.log('🔄 Setting srcObject...');
             video.srcObject = stream;
 
-            // Multiple fallback attempts
-            setTimeout(() => {
+            // Fallback attempts
+            const metadataTimeout = setTimeout(() => {
                 if (video.readyState === 0) {
-                    console.log("⚠️ Metadata timeout (3s) - trying to play anyway");
-                    video.play().catch(err => console.error("❌ Fallback play failed:", err));
+                    console.log('⚠️ Metadata timeout (3s) - trying to play anyway');
+                    video.play().catch(err => console.error('❌ Fallback play failed:', err));
                 }
             }, 3000);
 
-            // Additional fallback for stubborn streams
-            setTimeout(() => {
+            const playTimeout = setTimeout(() => {
                 if (video.paused) {
-                    console.log("⚠️ Video still paused after 5s - forcing play");
+                    console.log('⚠️ Video still paused after 5s - forcing play');
                     if (!isLocal) video.muted = true;
-                    video.play().catch(err => console.error("❌ Final fallback play failed:", err));
+                    video.play().catch(err => console.error('❌ Final fallback play failed:', err));
                 }
             }, 5000);
 
+            return () => {
+                video.onloadstart = null;
+                video.onloadeddata = null;
+                video.onloadedmetadata = null;
+                video.oncanplay = null;
+                video.onplay = null;
+                video.onplaying = null;
+                video.onerror = null;
+                video.srcObject = null;
+                clearTimeout(metadataTimeout);
+                clearTimeout(playTimeout);
+            };
         } else {
             console.log('🎯 Same stream, skipping assignment');
         }
-
-        return () => {
-            video.onloadstart = null;
-            video.onloadeddata = null;
-            video.onloadedmetadata = null;
-            video.oncanplay = null;
-            video.onplay = null;
-            video.onplaying = null;
-            video.onerror = null;
-        };
     }, [stream, isLocal]);
 
     return (
-        <div className="video-box">
-            <h3>{isLocal ? 'Local Video' : `Remote Video (${userId})`}</h3>
+        <div className="video-box" style={{ margin: '10px' }}>
+            <h3>{isLocal ? 'Local Video' : `Remote Video (${userId || 'Unknown'})`}</h3>
             <video
                 ref={videoRef}
                 autoPlay
                 playsInline
-                muted={isLocal}
-                controls={!isLocal} // Add controls for remote video to help debug
-                style={{ width: "100%", background: "black", minHeight: "200px" }}
+                muted={isLocal} // Mute local video to avoid echo
+                controls={!isLocal} // Add controls for remote video
+                style={{ width: '100%', maxWidth: '600px', background: 'black', minHeight: '200px' }}
             />
             {/* Debug info */}
-            <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
-                {stream && (
-                    <div>
-                        Stream ID: {stream.id}<br />
-                        Video tracks: {stream.getVideoTracks().length}<br />
-                        Audio tracks: {stream.getAudioTracks().length}<br />
-                        Active: {stream.active ? 'Yes' : 'No'}
-                    </div>
-                )}
-            </div>
+            {stream && (
+                <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
+                    Stream ID: {stream.id}<br />
+                    Video tracks: {stream.getVideoTracks().length}<br />
+                    Audio tracks: {stream.getAudioTracks().length}<br />
+                    Active: {stream.active ? 'Yes' : 'No'}
+                </div>
+            )}
             {isLocal && (
-                <div className="video-controls">
+                <div className="video-controls" style={{ marginTop: '10px' }}>
                     <button onClick={onStart} disabled={!!stream}>
                         Start Video
                     </button>
@@ -154,6 +159,6 @@ const VideoStream = ({ stream, isLocal, userId, onStart, onStop }) => {
             )}
         </div>
     );
-};
+});
 
-export default VideoStream;
+export default VideoPlayer;

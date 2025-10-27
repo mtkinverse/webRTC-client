@@ -172,6 +172,14 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             }
         };
 
+        pc.oniceconnectionstatechange = () => {
+            if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+                console.error('ICE connection issue:', pc.iceConnectionState);
+            } else if (pc.iceConnectionState === 'connected') {
+                console.log('ICE connection established');
+            }
+        };
+
         // Store the peer connection
 
         // Store peer connection in ref
