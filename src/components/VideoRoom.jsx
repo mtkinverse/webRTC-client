@@ -25,19 +25,71 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     const remoteVideoRef = useRef(null);
     const [remoteVideo, setRemoteVideo] = useState(null);
 
-    // ICE servers configuration
+    // ICE servers configuration with STUN and TURN servers
     const iceServers = {
         iceServers: [
+            // Google STUN servers
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+
+            // Additional STUN servers for redundancy
+            { urls: 'stun:stun.stunprotocol.org:3478' },
+            { urls: 'stun:stun.voiparound.com' },
+            { urls: 'stun:stun.voipbuster.com' },
+            { urls: 'stun:stun.voipstunt.com' },
+            { urls: 'stun:stun.voxgratia.org' },
+
+            // Free TURN servers (limited bandwidth, use for testing only)
+            {
+                urls: 'turn:openrelay.metered.ca:80',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+
+            // Twilio STUN (free tier)
+            { urls: 'stun:global.stun.twilio.com:3478' },
+
+            // Additional free TURN server
+            {
+                urls: 'turn:relay1.expressturn.com:3478',
+                username: 'efSCH9XY7qnhzz7y4a',
+                credential: 'lEczFWvoW1ixqyHl'
+            }
         ]
     };
 
     // Simplified peer connection creation
     const createPeerConnection = useCallback((remoteUserId, isInitiator = false) => {
         console.log(`Creating peer connection with ${remoteUserId}`, { isInitiator });
+        console.log('Using ICE servers:', iceServers.iceServers.map(server => server.urls));
 
         const pc = new RTCPeerConnection(iceServers);
+
+        // Monitor connection state
+        pc.onconnectionstatechange = () => {
+            console.log(`🔗 Connection state for ${remoteUserId}:`, pc.connectionState);
+        };
+
+        pc.oniceconnectionstatechange = () => {
+            console.log(`🧊 ICE connection state for ${remoteUserId}:`, pc.iceConnectionState);
+        };
+
+        pc.onicegatheringstatechange = () => {
+            console.log(`📡 ICE gathering state for ${remoteUserId}:`, pc.iceGatheringState);
+        };
 
         // Add all tracks from local stream to peer connection
         if (localStreamRef.current) {
@@ -45,11 +97,18 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                 pc.addTrack(track, localStreamRef.current);
             });
         }
+        else console.warn('localstream not available ...')
 
         // Send candidates to establish channel communication
         pc.onicecandidate = ({ candidate }) => {
             if (candidate && socketRef.current) {
-                socketRef.current.emit('webrtc', { type: 'ice-candidate', roomId: currentRoom, candidate });
+                socketRef.current.emit('webrtc', {
+                    type: 'ice-candidate',
+                    roomId: currentRoom,
+                    candidate,
+                    targetUserId: remoteUserId,
+                    userId: currentUserRef.current?.id
+                });
             }
         };
 
@@ -57,21 +116,46 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         pc.ontrack = (event) => {
             const streams = event.streams;
             const stream = streams[0];
-            console.log('Remote track received from:', remoteUserId, 'Stream:', stream);
-            console.log('Stream tracks:', stream?.getTracks());
-            console.log('Stream video tracks:', stream?.getVideoTracks());
-            console.log('Stream audio tracks:', stream?.getAudioTracks());
-            console.log('Stream active:', stream?.active);
+            console.log('🎵 Remote track received from:', remoteUserId);
+            console.log('🎵 Event details:', {
+                streams: event.streams.length,
+                track: event.track,
+                trackKind: event.track.kind,
+                trackId: event.track.id,
+                trackEnabled: event.track.enabled,
+                trackReadyState: event.track.readyState
+            });
 
             if (stream) {
-                // Set remote video only if it's different from current
-                if (remoteVideoRef.current !== stream) {
-                    console.log('🎯 Setting NEW remote video stream:', stream.id);
-                    remoteVideoRef.current = stream;
-                    setRemoteVideo(stream);
-                } else {
-                    console.log('🎯 Stream already set, skipping:', stream.id);
-                }
+                console.log('🎵 Stream details:', {
+                    id: stream.id,
+                    active: stream.active,
+                    videoTracks: stream.getVideoTracks().length,
+                    audioTracks: stream.getAudioTracks().length,
+                    allTracks: stream.getTracks().map(t => ({ kind: t.kind, id: t.id, enabled: t.enabled, readyState: t.readyState }))
+                });
+
+                // Validate stream quality
+                const videoTracks = stream.getVideoTracks();
+                const audioTracks = stream.getAudioTracks();
+
+                videoTracks.forEach((track, i) => {
+                    console.log(`🎥 Video track ${i}:`, {
+                        id: track.id,
+                        enabled: track.enabled,
+                        readyState: track.readyState,
+                        settings: track.getSettings ? track.getSettings() : 'N/A'
+                    });
+                });
+
+                audioTracks.forEach((track, i) => {
+                    console.log(`🔊 Audio track ${i}:`, {
+                        id: track.id,
+                        enabled: track.enabled,
+                        readyState: track.readyState,
+                        settings: track.getSettings ? track.getSettings() : 'N/A'
+                    });
+                });
 
                 setPeerConnections(prev => {
                     const newConnections = new Map(prev);
@@ -80,9 +164,11 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                         stream,
                         remoteUserId
                     });
-                    console.log('Updated peer connections with remote stream for:', remoteUserId);
+                    console.log('✅ Updated peer connections with remote stream for:', remoteUserId);
                     return newConnections;
                 });
+            } else {
+                console.warn('⚠️ No stream in ontrack event');
             }
         };
 
@@ -125,6 +211,19 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         // Initialize peer connection
         const pc = new RTCPeerConnection(iceServers);
 
+        // Monitor connection state
+        pc.onconnectionstatechange = () => {
+            console.log(`🔗 Connection state for ${userId} (handleOffer):`, pc.connectionState);
+        };
+
+        pc.oniceconnectionstatechange = () => {
+            console.log(`🧊 ICE connection state for ${userId} (handleOffer):`, pc.iceConnectionState);
+        };
+
+        pc.onicegatheringstatechange = () => {
+            console.log(`📡 ICE gathering state for ${userId} (handleOffer):`, pc.iceGatheringState);
+        };
+
         // Store peer connection in ref
         peerConnectionsRef.current.set(userId, { pc, remoteUserId: userId });
 
@@ -133,7 +232,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             try {
                 console.log('Acquiring media stream for offer response');
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: true,
+                    // video: true,
                     audio: true
                 });
                 setLocalStream(stream);
@@ -153,10 +252,16 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         }
 
         // Send candidates to establish channel communication
-        pc.onicecandidate = ({ candidate, userId }) => {
-            console.log('Ice candidate received ', userId)
+        pc.onicecandidate = ({ candidate }) => {
+            console.log('Ice candidate received for offer response')
             if (candidate && socketRef.current) {
-                socketRef.current.emit('webrtc', JSON.stringify({ type: 'ice-candidate', roomId, candidate }));
+                socketRef.current.emit('webrtc', JSON.stringify({
+                    type: 'ice-candidate',
+                    roomId,
+                    candidate,
+                    targetUserId: userId,
+                    userId: currentUserRef.current?.id
+                }));
             }
         };
 
@@ -164,16 +269,24 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         pc.ontrack = (event) => {
             const streams = event.streams;
             const stream = streams[0];
-            console.log('Remote track received in handleOffer from:', userId, 'Stream:', stream);
+            console.log('🎵 Remote track received in handleOffer from:', userId);
+            console.log('🎵 Event details:', {
+                streams: event.streams.length,
+                track: event.track,
+                trackKind: event.track.kind,
+                trackId: event.track.id,
+                trackEnabled: event.track.enabled,
+                trackReadyState: event.track.readyState
+            });
+
             if (stream) {
-                // Set remote video only if it's different from current
-                if (remoteVideoRef.current !== stream) {
-                    console.log('🎯 Setting NEW remote video stream in handleOffer:', stream.id);
-                    remoteVideoRef.current = stream;
-                    setRemoteVideo(stream);
-                } else {
-                    console.log('🎯 Stream already set in handleOffer, skipping:', stream.id);
-                }
+                console.log('🎵 Stream details:', {
+                    id: stream.id,
+                    active: stream.active,
+                    videoTracks: stream.getVideoTracks().length,
+                    audioTracks: stream.getAudioTracks().length,
+                    allTracks: stream.getTracks().map(t => ({ kind: t.kind, id: t.id, enabled: t.enabled, readyState: t.readyState }))
+                });
 
                 setPeerConnections(prev => {
                     const newConnections = new Map(prev);
@@ -182,9 +295,11 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                         stream,
                         remoteUserId: userId
                     });
-                    console.log('Updated peer connections with remote stream for:', userId);
+                    console.log('✅ Updated peer connections with remote stream for:', userId);
                     return newConnections;
                 });
+            } else {
+                console.warn('⚠️ No stream in handleOffer ontrack event');
             }
         };
 
@@ -194,7 +309,13 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
 
-            socketRef.current.emit('webrtc', JSON.stringify({ type: 'answer', roomId, sdp: answer }));
+            socketRef.current.emit('webrtc', JSON.stringify({
+                type: 'answer',
+                roomId,
+                sdp: answer,
+                targetUserId: userId,
+                userId: currentUserRef.current?.id
+            }));
         } catch (error) {
             console.error('Error handling offer:', error);
         }
@@ -411,7 +532,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     const startLocalVideo = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: true,
+                // video: true,
                 audio: true
             });
 
