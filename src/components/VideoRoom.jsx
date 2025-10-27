@@ -49,12 +49,14 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         // Send candidates to establish channel communication
         pc.onicecandidate = ({ candidate }) => {
             if (candidate && socketRef.current) {
-                socketRef.current.emit('candidate', remoteUserId, candidate);
+                socketRef.current.emit({ type: 'ice-candidate', roomId: currentRoom, candidate });
             }
         };
 
         // Receive stream from remote client and add to remote video area
-        pc.ontrack = ({ streams: [stream] }) => {
+        pc.ontrack = (event) => {
+            const streams = event.streams;
+            const stream = streams[0]
             console.log('Remote track received from:', remoteUserId, 'Stream:', stream);
             if (stream) {
                 // Set remote video directly (following your original pattern)
@@ -129,6 +131,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                 pc.addTrack(track, localStreamRef.current);
             });
         }
+        else console.warn("Localstream ref not available")
 
         // Send candidates to establish channel communication
         pc.onicecandidate = ({ candidate, userId }) => {
@@ -541,25 +544,19 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                     onStop={stopLocalVideo}
                 />
 
-                {/* Simple remote video following your pattern */}
+                {/* Remote video using VideoStream component */}
                 {remoteVideo && (
-                    <div className="video-box">
-                        <h3>Remote Video temp</h3>
-                        {console.log('Direct rendering ', remoteVideo)}
-                        <video
-                            ref={node => {
-                                if (node) node.srcObject = remoteVideo;
-                            }}
-                            autoPlay
-                            playsInline
-                        />
-                    </div>
+                    <VideoStream
+                        stream={remoteVideo}
+                        isLocal={false}
+                        userId="remote"
+                    />
                 )}
 
                 {/* <div className="remote-streams">
                     {Array.from(peerConnections.entries()).map(([userId, connectionData]) => {
                         const { stream } = connectionData;
-                        console.log('Rendering remote stream for user:', userId, 'Has stream:', stream);
+                        console.log('Rendering remote stream for user:', userId, 'Has stream:', !!stream);
                         return stream && (
                             <VideoStream
                                 key={userId}

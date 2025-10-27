@@ -1,11 +1,20 @@
+import { useEffect, useRef } from "react";
+
 const VideoStream = ({ stream, isLocal, userId, onStart, onStop }) => {
+    const videoRef = useRef(null);
+
+    useEffect(() => {
+        if (videoRef.current && stream) {
+            console.log(`🎥 Setting ${isLocal ? 'local' : 'remote'} stream:`, stream);
+            videoRef.current.srcObject = stream;
+        }
+    }, [stream, isLocal]);
+
     return (
         <div className="video-box">
             <h3>{isLocal ? 'Local Video' : `Remote Video (${userId})`}</h3>
             <video
-                ref={node => {
-                    if (node) node.srcObject = stream;
-                }}
+                ref={videoRef}
                 autoPlay
                 playsInline
                 muted={isLocal}
