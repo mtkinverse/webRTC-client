@@ -365,7 +365,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             const data = Array.isArray(rawData) ? rawData[0] : rawData;
             handleAnswer(data);
         });
-        newSocket.on('candidate', (rawData) => {
+        newSocket.on('ice-candidate', (rawData) => {
             const data = Array.isArray(rawData) ? rawData[0] : rawData;
             handleIceCandidate(data);
         });
