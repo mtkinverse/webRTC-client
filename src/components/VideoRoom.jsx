@@ -71,18 +71,19 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                     return newConnections;
                 });
             }
+
+            setPeerConnections(prev => {
+                const newConnections = new Map(prev);
+                newConnections.set(remoteUserId, {
+                    pc,
+                    remoteUserId,
+                    stream: stream
+                });
+                return newConnections;
+            });
         };
 
         // Store the peer connection
-        setPeerConnections(prev => {
-            const newConnections = new Map(prev);
-            newConnections.set(remoteUserId, {
-                pc,
-                remoteUserId,
-                stream: null
-            });
-            return newConnections;
-        });
 
         // Set connection references for simplified logic
         if (isInitiator) {
@@ -113,8 +114,10 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     };
 
     // Receive Offer From Other Client
-    const handleOffer = async ({ roomId, userId, sdp }) => {
-        console.log('Received offer from:', userId);
+    const handleOffer = async (data) => {
+        const { roomId, userId, sdp } = data;
+
+        console.log('Received offer from:', data);
 
         // Initialize peer connection
         const pc = new RTCPeerConnection(iceServers);
@@ -128,7 +131,8 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         }
 
         // Send candidates to establish channel communication
-        pc.onicecandidate = ({ candidate }) => {
+        pc.onicecandidate = ({ candidate, userId }) => {
+            console.log('Ice candidate received ', userId)
             if (candidate && socketRef.current) {
                 socketRef.current.emit('webrtc', { type: 'ice-candidate', roomId, candidate });
             }
@@ -143,10 +147,10 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
                 setPeerConnections(prev => {
                     const newConnections = new Map(prev);
-                    newConnections.set(socketId, {
+                    newConnections.set(userId, {
                         pc,
                         stream,
-                        remoteUserId: socketId
+                        remoteUserId: userId
                     });
                     console.log('Updated peer connections with remote stream for:', userId);
                     return newConnections;
@@ -237,9 +241,9 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             onDisconnect?.();
         });
 
-        newSocket.on('room-update', (data) => {
-            console.log('Raw room-update event:', data);
-            const payload = data[0];
+        newSocket.on('room-update', (rawData) => {
+            console.log('Raw room-update event:', rawData);
+            const payload = Array.isArray(rawData) ? rawData[0] : rawData;
             if (payload && payload.users) {
                 console.log('Setting users:', payload.users);
                 const newUsers = payload.users;
@@ -281,9 +285,18 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         });
 
 
-        newSocket.on('offer', (socketId, description) => handleOffer(socketId, description));
-        newSocket.on('answer', (description) => handleAnswer(description));
-        newSocket.on('candidate', (candidate) => handleIceCandidate(candidate));
+        newSocket.on('offer', (rawData) => {
+            const data = Array.isArray(rawData) ? rawData[0] : rawData;
+            handleOffer(data);
+        });
+        newSocket.on('answer', (rawData) => {
+            const data = Array.isArray(rawData) ? rawData[0] : rawData;
+            handleAnswer(data);
+        });
+        newSocket.on('candidate', (rawData) => {
+            const data = Array.isArray(rawData) ? rawData[0] : rawData;
+            handleIceCandidate(data);
+        });
         return newSocket;
     };
 
