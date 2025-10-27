@@ -201,7 +201,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
     const connectToServer = async (serverUrl, userData) => {
         if (socket) {
-            return socket;
+            socket.disconnect();
         }
 
         const newSocket = io(serverUrl, {
