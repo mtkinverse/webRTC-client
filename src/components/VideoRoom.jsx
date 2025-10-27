@@ -544,7 +544,8 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                 {/* Simple remote video following your pattern */}
                 {remoteVideo && (
                     <div className="video-box">
-                        <h3>Remote Video</h3>
+                        <h3>Remote Video temp</h3>
+                        {console.log('Direct rendering ', remoteVideo)}
                         <video
                             ref={node => {
                                 if (node) node.srcObject = remoteVideo;
@@ -555,10 +556,10 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                     </div>
                 )}
 
-                <div className="remote-streams">
+                {/* <div className="remote-streams">
                     {Array.from(peerConnections.entries()).map(([userId, connectionData]) => {
                         const { stream } = connectionData;
-                        console.log('Rendering remote stream for user:', userId, 'Has stream:', !!stream);
+                        console.log('Rendering remote stream for user:', userId, 'Has stream:', stream);
                         return stream && (
                             <VideoStream
                                 key={userId}
@@ -568,7 +569,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                             />
                         );
                     })}
-                </div>
+                </div> */}
             </div>
 
             <UserList
