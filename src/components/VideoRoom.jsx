@@ -49,7 +49,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         // Send candidates to establish channel communication
         pc.onicecandidate = ({ candidate }) => {
             if (candidate && socketRef.current) {
-                socketRef.current.emit({ type: 'ice-candidate', roomId: currentRoom, candidate });
+                socketRef.current.emit('webrtc', { type: 'ice-candidate', roomId: currentRoom, candidate });
             }
         };
 
@@ -137,7 +137,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         pc.onicecandidate = ({ candidate, userId }) => {
             console.log('Ice candidate received ', userId)
             if (candidate && socketRef.current) {
-                socketRef.current.emit('webrtc', { type: 'ice-candidate', roomId, candidate });
+                socketRef.current.emit('webrtc', JSON.stringify({ type: 'ice-candidate', roomId, candidate }));
             }
         };
 
@@ -167,7 +167,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
 
-            socketRef.current.emit('webrtc', { type: 'answer', roomId, sdp: answer });
+            socketRef.current.emit('webrtc', JSON.stringify({ type: 'answer', roomId, sdp: answer }));
         } catch (error) {
             console.error('Error handling offer:', error);
         }
@@ -234,14 +234,49 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
 
         newSocket.on('connect', () => {
+            console.log('Socket connected/reconnected');
             setConnectionStatus('connected');
         });
 
-        newSocket.on('disconnect', () => {
+        newSocket.on('reconnect', (attemptNumber) => {
+            console.log('Socket reconnected after', attemptNumber, 'attempts');
+            setConnectionStatus('connected');
+        });
+
+        newSocket.on('reconnect_attempt', (attemptNumber) => {
+            console.log('Attempting to reconnect, attempt:', attemptNumber);
+            setConnectionStatus('reconnecting');
+        });
+
+        newSocket.on('reconnect_error', (error) => {
+            console.log('Reconnection failed:', error);
+            setConnectionStatus('reconnecting');
+        });
+
+        newSocket.on('reconnect_failed', () => {
+            console.log('Reconnection failed permanently');
             setConnectionStatus('disconnected');
+            // Only now should we consider navigating back
             peerConnections.forEach(({ pc }) => pc?.close());
             setPeerConnections(new Map());
             onDisconnect?.();
+        });
+
+        newSocket.on('disconnect', (reason) => {
+            console.log('Socket disconnected, reason:', reason);
+            setConnectionStatus('disconnected');
+
+            // Only navigate back to connection form for intentional disconnects
+            // Don't navigate for temporary network issues or server restarts
+            if (reason === 'io client disconnect' || reason === 'transport close') {
+                console.log('Intentional disconnect, navigating back to connection form');
+                peerConnections.forEach(({ pc }) => pc?.close());
+                setPeerConnections(new Map());
+                onDisconnect?.();
+            } else {
+                console.log('Temporary disconnect, staying in video room. Reason:', reason);
+                // Keep peer connections alive for potential reconnection
+            }
         });
 
         newSocket.on('room-update', (rawData) => {
