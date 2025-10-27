@@ -22,6 +22,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     const currentRoomRef = useRef(null);
     const currentUserRef = useRef(null);
     const localStreamRef = useRef(null);
+    const remoteVideoRef = useRef(null);
     const [remoteVideo, setRemoteVideo] = useState(null);
 
     // ICE servers configuration
@@ -63,8 +64,14 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             console.log('Stream active:', stream?.active);
 
             if (stream) {
-                // Set remote video directly (following your original pattern)
-                setRemoteVideo(stream);
+                // Set remote video only if it's different from current
+                if (remoteVideoRef.current !== stream) {
+                    console.log('🎯 Setting NEW remote video stream:', stream.id);
+                    remoteVideoRef.current = stream;
+                    setRemoteVideo(stream);
+                } else {
+                    console.log('🎯 Stream already set, skipping:', stream.id);
+                }
 
                 setPeerConnections(prev => {
                     const newConnections = new Map(prev);
@@ -154,11 +161,19 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         };
 
         // Receive stream from remote client and add to remote video area
-        pc.ontrack = ({ streams: [stream] }) => {
+        pc.ontrack = (event) => {
+            const streams = event.streams;
+            const stream = streams[0];
             console.log('Remote track received in handleOffer from:', userId, 'Stream:', stream);
             if (stream) {
-                // Set remote video directly (following your original pattern)
-                setRemoteVideo(stream);
+                // Set remote video only if it's different from current
+                if (remoteVideoRef.current !== stream) {
+                    console.log('🎯 Setting NEW remote video stream in handleOffer:', stream.id);
+                    remoteVideoRef.current = stream;
+                    setRemoteVideo(stream);
+                } else {
+                    console.log('🎯 Stream already set in handleOffer, skipping:', stream.id);
+                }
 
                 setPeerConnections(prev => {
                     const newConnections = new Map(prev);

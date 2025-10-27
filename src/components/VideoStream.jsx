@@ -11,7 +11,20 @@ const VideoStream = ({ stream, isLocal, userId, onStart, onStop }) => {
 
         // Important: stop re-assigning if same stream
         if (video.srcObject !== stream) {
+            console.log('new stream ', stream)
+            videoRef.current.srcObject = stream;
             video.srcObject = stream;
+
+            console.log('Stream video tracks:', stream?.getVideoTracks());
+            console.log('Stream audio tracks:', stream?.getAudioTracks());
+            // Attach BEFORE play()
+            video.onloadedmetadata = () => console.log("✅ metadata loaded");
+            video.oncanplay = () => console.log("✅ canplay fired");
+            video.onplay = () => console.log("✅ playing");
+            // play instantly (no events needed)
+            video.play()
+                .then(() => console.log(`✅ ${isLocal ? 'local' : 'remote'} is playing`))
+                .catch(err => console.error("❌ play() failed:", err));
         }
 
         const handleMetadata = async () => {
@@ -23,11 +36,11 @@ const VideoStream = ({ stream, isLocal, userId, onStart, onStop }) => {
             }
         };
 
-        video.onloadedmetadata = handleMetadata;
+        // video.onloadedmetadata = handleMetadata;
 
-        return () => {
-            video.onloadedmetadata = null; // cleanup
-        };
+        // return () => {
+        //     video.onloadedmetadata = null; // cleanup
+        // };
     }, [stream]);
 
     return (
