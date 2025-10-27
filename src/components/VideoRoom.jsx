@@ -16,9 +16,8 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     const [users, setUsers] = useState([]);
     const [connectionStatus, setConnectionStatus] = useState('disconnected');
 
-    // Local and remote connection references using useRef to avoid stale closures
-    const localConnectionRef = useRef(null);
-    const remoteConnectionRef = useRef(null);
+    // Peer connections ref using useRef to avoid stale closures
+    const peerConnectionsRef = useRef(new Map());
     const socketRef = useRef(null);
     const currentRoomRef = useRef(null);
     const currentUserRef = useRef(null);
@@ -74,25 +73,16 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                 });
             }
 
-            setPeerConnections(prev => {
-                const newConnections = new Map(prev);
-                newConnections.set(remoteUserId, {
-                    pc,
-                    remoteUserId,
-                    stream: stream
-                });
-                return newConnections;
-            });
         };
 
         // Store the peer connection
 
+        // Store peer connection in ref
+        peerConnectionsRef.current.set(remoteUserId, { pc, remoteUserId });
+
         // Set connection references for simplified logic
         if (isInitiator) {
-            localConnectionRef.current = pc;
             createAndSendOffer(pc, remoteUserId);
-        } else {
-            remoteConnectionRef.current = pc;
         }
 
         return pc;
@@ -123,15 +113,33 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
 
         // Initialize peer connection
         const pc = new RTCPeerConnection(iceServers);
-        remoteConnectionRef.current = pc;
+
+        // Store peer connection in ref
+        peerConnectionsRef.current.set(userId, { pc, remoteUserId: userId });
+
+        // Acquire media stream if not available
+        if (!localStreamRef.current) {
+            try {
+                console.log('Acquiring media stream for offer response');
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: true
+                });
+                setLocalStream(stream);
+                localStreamRef.current = stream;
+            } catch (error) {
+                console.error('Error acquiring media stream:', error);
+            }
+        }
 
         // Add all tracks from stream to peer connection
         if (localStreamRef.current) {
             localStreamRef.current.getTracks().forEach(track => {
                 pc.addTrack(track, localStreamRef.current);
             });
+        } else {
+            console.warn("Local stream not available after acquisition attempt");
         }
-        else console.warn("Localstream ref not available")
 
         // Send candidates to establish channel communication
         pc.onicecandidate = ({ candidate, userId }) => {
@@ -177,9 +185,12 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     const handleAnswer = async ({ roomId, userId, sdp: description }) => {
         console.log('Received answer ', description, ' from ', userId);
 
-        if (localConnectionRef.current) {
+        const peerConnection = peerConnectionsRef.current.get(userId);
+        if (peerConnection?.pc) {
             try {
-                await localConnectionRef.current.setRemoteDescription(description);
+                if (peerConnection.pc.signalingState !== "stable")
+                    await peerConnection.pc.setRemoteDescription(description);
+                else console.warn('Already is stable state')
             } catch (error) {
                 console.error('Error setting remote description:', error);
             }
@@ -187,19 +198,21 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
     };
 
     // Receive candidates and add to peer connection
-    const handleIceCandidate = async ({ candidate }) => {
-        console.log('Received ICE candidate ', candidate);
+    const handleIceCandidate = async ({ candidate, userId }) => {
+        console.log('Received ICE candidate ', candidate, 'from', userId);
 
-        // Get Local or Remote Connection
-        const conn = localConnectionRef.current || remoteConnectionRef.current;
+        // Get the specific peer connection for this user
+        const peerConnection = peerConnectionsRef.current.get(userId);
 
-        if (conn) {
+        if (peerConnection?.pc) {
             try {
-                await conn.addIceCandidate(new RTCIceCandidate(candidate));
+                await peerConnection.pc.addIceCandidate(new RTCIceCandidate(candidate));
             } catch (error) {
                 console.error('Error adding ICE candidate:', error);
             }
-        } else console.warn('Connection not foudn for forwarding ice-candidate')
+        } else {
+            console.warn('Peer connection not found for userId:', userId);
+        }
     };
 
     const connectToServer = async (serverUrl, userData) => {
@@ -257,7 +270,8 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             console.log('Reconnection failed permanently');
             setConnectionStatus('disconnected');
             // Only now should we consider navigating back
-            peerConnections.forEach(({ pc }) => pc?.close());
+            peerConnectionsRef.current.forEach(({ pc }) => pc?.close());
+            peerConnectionsRef.current.clear();
             setPeerConnections(new Map());
             onDisconnect?.();
         });
@@ -270,7 +284,8 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
             // Don't navigate for temporary network issues or server restarts
             if (reason === 'io client disconnect' || reason === 'transport close') {
                 console.log('Intentional disconnect, navigating back to connection form');
-                peerConnections.forEach(({ pc }) => pc?.close());
+                peerConnectionsRef.current.forEach(({ pc }) => pc?.close());
+                peerConnectionsRef.current.clear();
                 setPeerConnections(new Map());
                 onDisconnect?.();
             } else {
@@ -363,10 +378,11 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
         }));
 
         // Clean up peer connections
-        peerConnections.forEach(({ pc }) => {
+        peerConnectionsRef.current.forEach(({ pc }) => {
             console.log(`Closing peer connection for user`);
             pc?.close();
         });
+        peerConnectionsRef.current.clear();
         setPeerConnections(new Map());
         setCurrentRoom(null);
         setUsers([]);
@@ -580,15 +596,15 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                 />
 
                 {/* Remote video using VideoStream component */}
-                {remoteVideo && (
+                {/* {remoteVideo && (
                     <VideoStream
                         stream={remoteVideo}
                         isLocal={false}
                         userId="remote"
                     />
-                )}
+                )} */}
 
-                {/* <div className="remote-streams">
+                <div className="remote-streams">
                     {Array.from(peerConnections.entries()).map(([userId, connectionData]) => {
                         const { stream } = connectionData;
                         console.log('Rendering remote stream for user:', userId, 'Has stream:', !!stream);
@@ -601,7 +617,7 @@ const VideoRoom = ({ serverUrl, userData, onDisconnect }) => {
                             />
                         );
                     })}
-                </div> */}
+                </div>
             </div>
 
             <UserList
