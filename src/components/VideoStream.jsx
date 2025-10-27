@@ -11,7 +11,7 @@ const VideoPlayer = React.memo(({ stream, isLocal = false, userId = '', onStart,
             return;
         }
 
-        console.log(`🎥 Attaching ${isLocal ? 'local' : 'remote'} stream`);
+        console.log(`🎥 Attaching ${isLocal ? 'local' : 'remote'} stream`, stream);
 
         // Only update if stream is different
         if (streamRef.current !== stream) {
@@ -28,6 +28,7 @@ const VideoPlayer = React.memo(({ stream, isLocal = false, userId = '', onStart,
             }
 
             console.log('Stream video tracks:', videoTracks);
+            // console.log(videoTracks.getSettings())
             console.log('Stream audio tracks:', audioTracks);
             console.log('Video track states:', videoTracks.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })));
             console.log('Audio track states:', audioTracks.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })));
@@ -134,7 +135,7 @@ const VideoPlayer = React.memo(({ stream, isLocal = false, userId = '', onStart,
                 ref={videoRef}
                 autoPlay
                 playsInline
-                muted={isLocal} // Mute local video to avoid echo
+                muted={true} // Mute local video to avoid echo
                 controls={!isLocal} // Add controls for remote video
                 style={{ width: '100%', maxWidth: '600px', background: 'black', minHeight: '200px' }}
             />
